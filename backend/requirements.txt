@@ -1,0 +1,7 @@
+fastapi>=0.68.0
+python-dotenv
+motor>=3.0.0
+pydantic[email]>=2.0.0
+httpx
+beautifulsoup4
+uvicorn
