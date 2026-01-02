@@ -76,9 +76,10 @@ uvicorn server:app --reload
 venv\Scripts\activate  # On Linux: source venv/bin/activate
 ```
 
-6. **Start frontend**
+6. **Install Dependencies & Start frontend**
 ```bash
 cd frontend
+yarn install
 yarn start
 ```
 
