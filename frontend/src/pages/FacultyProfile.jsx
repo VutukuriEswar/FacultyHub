@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'; // Added useCallback
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, ArrowLeft, MessageSquare, Send, Reply } from 'lucide-react';
+import { Star, ArrowLeft, MessageSquare, Send, Reply, MapPin, Mail, Phone as PhoneIcon, BookOpen, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -29,7 +29,9 @@ export default function FacultyProfile({ user }) {
   const [replyingTo, setReplyingTo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tempRatings, setTempRatings] = useState({});
+  const [showAllPublications, setShowAllPublications] = useState(false);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
@@ -57,11 +59,11 @@ export default function FacultyProfile({ user }) {
     } finally {
       setLoading(false);
     }
-  }, [facultyId]); // Dependency: facultyId
+  }, [facultyId]);
 
   useEffect(() => {
     loadData();
-  }, [loadData]); // Dependency: loadData
+  }, [loadData]);
 
   const handleRatingSubmit = async () => {
     if (!tempRatings.overall) {
@@ -118,6 +120,55 @@ export default function FacultyProfile({ user }) {
   const topLevelComments = comments.filter(c => !c.parent_comment_id);
   const getReplies = (commentId) => comments.filter(c => c.parent_comment_id === commentId);
 
+  // --- STRICT FIELD DEFINITIONS ---
+
+  // Fields that should NEVER be shown (System/Internal fields)
+  const SYSTEM_FIELDS = [
+    'faculty_id', 'name', 'department', 'designation',
+    'scholar_profile', 'publications', 'research_interests', 'office_address',
+    'email', 'phone',
+    'avg_ratings', 'rating_counts', 'created_at', 'updated_at',
+    'openalex_projects', 'recommendation_reason',
+    'image_url', 'Image URL', 'Image', 'Profile Picture', 'Profile_Picture' // Hide all variations
+  ];
+
+  // Helper to check if a key is a system field
+  const isSystemField = (key) => {
+    if (SYSTEM_FIELDS.includes(key)) return true;
+
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.includes('image') || lowerKey.includes('picture') || lowerKey.includes('url')) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // Helper to check if a key is a display field (public/excel data)
+  const isDisplayField = (key) => !isSystemField(key);
+
+  const renderDetailsList = (data) => {
+    if (!data) return [];
+
+    return Object.keys(data)
+      .map(key => {
+        if (isSystemField(key)) return null;
+
+        const value = data[key];
+        if (!value || value === 'Unknown' || value === 'null' || value === '') return null;
+
+        return (
+          <div key={key} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <span className="text-sm font-semibold text-muted-foreground capitalize">
+              {key.replace(/_/g, ' ')}:
+            </span>
+            <span className="text-sm">{value}</span>
+          </div>
+        );
+      })
+      .filter(item => item !== null);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -146,18 +197,64 @@ export default function FacultyProfile({ user }) {
         <Card className="mb-8" data-testid="faculty-profile-card">
           <CardContent className="p-8">
             <div className="flex flex-col md:flex-row gap-8">
-              <Avatar className="w-32 h-32">
-                <AvatarImage src={faculty.image_url} />
-                <AvatarFallback className="text-3xl">{faculty.name.charAt(0)}</AvatarFallback>
+
+              {/* --- UPDATED PROFILE IMAGE SECTION --- */}
+              <Avatar className="w-32 h-32 h-auto border-2 border-border">
+                {/* 
+                   1. src={faculty.image_url}: Uses the URL fetched from backend
+                   2. onLoadingError: Hides the image if it fails, showing the Fallback (Initials)
+                   3. className="object-cover": Ensures the image fills the circle without stretching
+                */}
+                <AvatarImage
+                  src={faculty.image_url}
+                  alt={faculty.name}
+                  className="object-cover"
+                  onLoadingError={(e) => {
+                    e.currentTarget.style.display = 'none'; // Hide broken image
+                  }}
+                />
+                <AvatarFallback className="text-3xl bg-primary/10 text-primary">
+                  {faculty.name ? faculty.name.charAt(0).toUpperCase() : '?'}
+                </AvatarFallback>
               </Avatar>
 
-              <div className="flex-1">
-                <h1 className="text-3xl font-bold mb-2" data-testid="faculty-name">{faculty.name}</h1>
-                <p className="text-lg text-muted-foreground mb-2">{faculty.designation}</p>
-                <Badge className="mb-4">{faculty.department}</Badge>
+              <div className="flex-1 space-y-4">
+                <div>
+                  <h1 className="text-3xl font-bold mb-2" data-testid="faculty-name">{faculty.name}</h1>
+                  <p className="text-lg text-muted-foreground mb-2">{faculty.designation}</p>
+                  <Badge className="mb-4">{faculty.department}</Badge>
+                </div>
 
+                {/* Email & Phone - Prioritized Contact Info */}
+                <div className="flex flex-wrap gap-4">
+                  {faculty.email && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Mail className="w-4 h-4" />
+                      <span>{faculty.email}</span>
+                    </div>
+                  )}
+                  {faculty.phone && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <PhoneIcon className="w-4 h-4" />
+                      <span>{faculty.phone}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Office Address */}
+                {faculty.office_address && (
+                  <div className="flex items-start gap-2">
+                    <MapPin className="w-4 h-4 text-muted-foreground mt-1" />
+                    <div>
+                      <h3 className="font-semibold mb-1">Office Address</h3>
+                      <p className="text-sm text-muted-foreground">{faculty.office_address}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Research Interests / Specialisation */}
                 {faculty.research_interests && (
-                  <div className="mb-4">
+                  <div>
                     <h3 className="font-semibold mb-1">Research Interests</h3>
                     <p className="text-sm text-muted-foreground">{faculty.research_interests}</p>
                   </div>
@@ -168,7 +265,7 @@ export default function FacultyProfile({ user }) {
                     href={faculty.scholar_profile}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-primary hover:underline text-sm"
+                    className="text-primary hover:underline text-sm inline-block"
                   >
                     View Google Scholar Profile →
                   </a>
@@ -190,6 +287,88 @@ export default function FacultyProfile({ user }) {
                 ))}
               </div>
             </div>
+
+            {/* --- UPDATED SECTION: OPENALEX PROJECTS WITH PAGINATION --- */}
+            {faculty.openalex_projects && faculty.openalex_projects.length > 0 ? (
+              <div className="mt-8 pt-6 border-t border-border">
+                <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
+                  <BookOpen className="w-5 h-5 text-primary" />
+                  Research Projects ({faculty.openalex_projects.length})
+                </h3>
+                <div className="space-y-3">
+                  {(showAllPublications
+                    ? faculty.openalex_projects
+                    : faculty.openalex_projects.slice(0, 10)
+                  ).map((project, idx) => (
+                    <div
+                      key={idx}
+                      className="group p-4 bg-white border border-border rounded-lg shadow-sm hover:shadow-md transition-all duration-300 hover:border-primary/50"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        {/* Left: Type and Title */}
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Badge variant="secondary" className="text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 bg-slate-100 text-slate-600">
+                              {project.type || "Article"}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground font-mono">
+                              {project.publication_year || "Unknown"}
+                            </span>
+                          </div>
+                          <h4 className="font-semibold text-slate-800 leading-snug">
+                            {project.title || "Untitled Project"}
+                          </h4>
+                        </div>
+
+                        {/* Right: View Button */}
+                        <a
+                          href={`https://openalex.org/work/${project.openalex_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors whitespace-nowrap bg-primary/5 px-4 py-2 rounded-md hover:bg-primary/10"
+                        >
+                          <BookOpen className="w-4 h-4" />
+                          View on OpenAlex
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* View All / Show Less Button */}
+                {faculty.openalex_projects.length > 10 && (
+                  <div className="mt-6 flex justify-center">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowAllPublications(!showAllPublications)}
+                      className="px-6 py-2 font-medium"
+                      data-testid="toggle-publications-button"
+                    >
+                      {showAllPublications
+                        ? `Show Less`
+                        : `View All (${faculty.openalex_projects.length} publications)`
+                      }
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-8 pt-6 border-t border-border">
+                <p className="text-sm text-muted-foreground italic">
+                  No OpenAlex projects synced for this faculty member yet.
+                </p>
+              </div>
+            )}
+
+            {/* DYNAMIC "EVERYTHING" SECTION */}
+            {renderDetailsList(faculty).length > 0 && (
+              <div className="mt-8 pt-6 border-t border-border">
+                <h3 className="text-xl font-semibold mb-4">Additional Details</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-y-2 gap-x-4">
+                  {renderDetailsList(faculty)}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

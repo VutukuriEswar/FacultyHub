@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Plus, Edit, Trash, Save, X } from 'lucide-react';
+import { ArrowLeft, Plus, Edit, Trash, Save, X, Database } from 'lucide-react'; // Added Database icon
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,6 +14,9 @@ import { toast } from 'sonner';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+
+// Ensure cookies are sent
+axios.defaults.withCredentials = true;
 
 const DEPARTMENTS = [
   'SCOPE',
@@ -31,6 +34,7 @@ export default function AdminPanel({ user }) {
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingFaculty, setEditingFaculty] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false); // NEW STATE
   const [formData, setFormData] = useState({
     name: '',
     department: 'SCOPE',
@@ -60,6 +64,24 @@ export default function AdminPanel({ user }) {
       toast.error('Failed to load faculty');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // NEW FUNCTION: Sync OpenAlex
+  const handleSyncOpenAlex = async () => {
+    const confirm = window.confirm("This will update all faculty profiles with OpenAlex project data. It may take a moment. Continue?");
+    if (!confirm) return;
+
+    setIsSyncing(true);
+    try {
+      const response = await axios.post(`${API}/admin/sync-openalex`);
+      toast.success(`Sync Completed! Updated: ${response.data.updated_count}, Failed: ${response.data.failed_count}`);
+      loadFaculty(); // Reload to see changes
+    } catch (error) {
+      console.error('Sync error:', error);
+      toast.error('Failed to sync OpenAlex data. Check console.');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -150,111 +172,124 @@ export default function AdminPanel({ user }) {
 
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-4xl font-bold gradient-text" data-testid="admin-header">Admin Panel</h1>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => handleOpenDialog()} data-testid="add-faculty-button">
-                <Plus className="w-4 h-4 mr-2" />
-                Add Faculty
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" data-testid="faculty-dialog">
-              <DialogHeader>
-                <DialogTitle>{editingFaculty ? 'Edit Faculty' : 'Add New Faculty'}</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div>
-                  <Label htmlFor="name">Full Name *</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    data-testid="faculty-name-input"
-                  />
-                </div>
+          <div className="flex gap-2">
+            {/* NEW SYNC BUTTON */}
+            <Button
+              onClick={handleSyncOpenAlex}
+              disabled={isSyncing}
+              variant="outline"
+              className="border-blue-500 text-blue-600 hover:bg-blue-50"
+            >
+              <Database className="w-4 h-4 mr-2" />
+              {isSyncing ? 'Syncing...' : 'Sync OpenAlex Data'}
+            </Button>
 
-                <div>
-                  <Label htmlFor="department">Department *</Label>
-                  <Select value={formData.department} onValueChange={(val) => setFormData({ ...formData, department: val })}>
-                    <SelectTrigger data-testid="faculty-department-select">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {DEPARTMENTS.map(dept => (
-                        <SelectItem key={dept} value={dept}>{dept}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={() => handleOpenDialog()} data-testid="add-faculty-button">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Faculty
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto" data-testid="faculty-dialog">
+                <DialogHeader>
+                  <DialogTitle>{editingFaculty ? 'Edit Faculty' : 'Add New Faculty'}</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                  <div>
+                    <Label htmlFor="name">Full Name *</Label>
+                    <Input
+                      id="name"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      data-testid="faculty-name-input"
+                    />
+                  </div>
 
-                <div>
-                  <Label htmlFor="designation">Designation *</Label>
-                  <Input
-                    id="designation"
-                    value={formData.designation}
-                    onChange={(e) => setFormData({ ...formData, designation: e.target.value })}
-                    placeholder="e.g., Associate Professor"
-                    data-testid="faculty-designation-input"
-                  />
-                </div>
+                  <div>
+                    <Label htmlFor="department">Department *</Label>
+                    <Select value={formData.department} onValueChange={(val) => setFormData({ ...formData, department: val })}>
+                      <SelectTrigger data-testid="faculty-department-select">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEPARTMENTS.map(dept => (
+                          <SelectItem key={dept} value={dept}>{dept}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                <div>
-                  <Label htmlFor="image_url">Profile Image URL</Label>
-                  <Input
-                    id="image_url"
-                    value={formData.image_url}
-                    onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                    placeholder="https://..."
-                    data-testid="faculty-image-input"
-                  />
-                </div>
+                  <div>
+                    <Label htmlFor="designation">Designation *</Label>
+                    <Input
+                      id="designation"
+                      value={formData.designation}
+                      onChange={(e) => setFormData({ ...formData, designation: e.target.value })}
+                      placeholder="e.g., Associate Professor"
+                      data-testid="faculty-designation-input"
+                    />
+                  </div>
 
-                <div>
-                  <Label htmlFor="scholar_profile">Google Scholar Profile URL</Label>
-                  <Input
-                    id="scholar_profile"
-                    value={formData.scholar_profile}
-                    onChange={(e) => setFormData({ ...formData, scholar_profile: e.target.value })}
-                    placeholder="https://scholar.google.com/..."
-                    data-testid="faculty-scholar-input"
-                  />
-                </div>
+                  <div>
+                    <Label htmlFor="image_url">Profile Image URL</Label>
+                    <Input
+                      id="image_url"
+                      value={formData.image_url}
+                      onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                      placeholder="https://..."
+                      data-testid="faculty-image-input"
+                    />
+                  </div>
 
-                <div>
-                  <Label htmlFor="publications">Publications (one per line)</Label>
-                  <Textarea
-                    id="publications"
-                    value={formData.publications}
-                    onChange={(e) => setFormData({ ...formData, publications: e.target.value })}
-                    rows={4}
-                    placeholder="Publication title 1&#10;Publication title 2&#10;..."
-                    data-testid="faculty-publications-input"
-                  />
-                </div>
+                  <div>
+                    <Label htmlFor="scholar_profile">Google Scholar Profile URL</Label>
+                    <Input
+                      id="scholar_profile"
+                      value={formData.scholar_profile}
+                      onChange={(e) => setFormData({ ...formData, scholar_profile: e.target.value })}
+                      placeholder="https://scholar.google.com/..."
+                      data-testid="faculty-scholar-input"
+                    />
+                  </div>
 
-                <div>
-                  <Label htmlFor="research_interests">Research Interests</Label>
-                  <Textarea
-                    id="research_interests"
-                    value={formData.research_interests}
-                    onChange={(e) => setFormData({ ...formData, research_interests: e.target.value })}
-                    rows={3}
-                    data-testid="faculty-research-input"
-                  />
-                </div>
+                  <div>
+                    <Label htmlFor="publications">Publications (one per line)</Label>
+                    <Textarea
+                      id="publications"
+                      value={formData.publications}
+                      onChange={(e) => setFormData({ ...formData, publications: e.target.value })}
+                      rows={4}
+                      placeholder="Publication title 1&#10;Publication title 2&#10;..."
+                      data-testid="faculty-publications-input"
+                    />
+                  </div>
 
-                <div className="flex gap-2 pt-4">
-                  <Button onClick={handleSubmit} className="flex-1" data-testid="save-faculty-button">
-                    <Save className="w-4 h-4 mr-2" />
-                    {editingFaculty ? 'Update' : 'Create'}
-                  </Button>
-                  <Button variant="outline" onClick={() => setIsDialogOpen(false)} data-testid="cancel-faculty-button">
-                    <X className="w-4 h-4 mr-2" />
-                    Cancel
-                  </Button>
+                  <div>
+                    <Label htmlFor="research_interests">Research Interests</Label>
+                    <Textarea
+                      id="research_interests"
+                      value={formData.research_interests}
+                      onChange={(e) => setFormData({ ...formData, research_interests: e.target.value })}
+                      rows={3}
+                      data-testid="faculty-research-input"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-4">
+                    <Button onClick={handleSubmit} className="flex-1" data-testid="save-faculty-button">
+                      <Save className="w-4 h-4 mr-2" />
+                      {editingFaculty ? 'Update' : 'Create'}
+                    </Button>
+                    <Button variant="outline" onClick={() => setIsDialogOpen(false)} data-testid="cancel-faculty-button">
+                      <X className="w-4 h-4 mr-2" />
+                      Cancel
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </DialogContent>
-          </Dialog>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         {loading ? (

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios'; // Standard import
+import axios from 'axios';
 import { GraduationCap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,9 +8,11 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 
-// FIX: Define the API URL explicitly like the other pages
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+
+// Configure axios to send cookies for every request from this component
+axios.defaults.withCredentials = true;
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -29,15 +31,13 @@ export default function LandingPage() {
 
     setIsLoading(true);
     try {
-      // FIX: Use the explicit API constant
       const response = await axios.post(`${API}/auth/login`, { email, password });
       const user = response.data;
       toast.success(`Welcome, ${user.name}!`);
-
       navigate('/dashboard', { state: { user }, replace: true });
     } catch (error) {
       console.error('Login error:', error);
-      toast.error(error.response?.data?.detail || 'Login failed. Please try again.');
+      toast.error(error.response?.data?.detail || 'Invalid credentials. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -50,11 +50,14 @@ export default function LandingPage() {
       return;
     }
 
+    if (!email.endsWith('@vitapstudent.ac.in')) {
+      toast.error('Registration is restricted to @vitapstudent.ac.in emails only.');
+      return;
+    }
+
     setIsLoading(true);
     try {
-      // Note: Based on your server.py, there isn't a dedicated /auth/register endpoint 
-      // that creates a user manually, only a login that creates one if it doesn't exist.
-      // I will keep this logic consistent with your server's capabilities or warn if it's missing.
+      // Call the new dedicated register endpoint
       await axios.post(`${API}/auth/register`, { name, email, password });
       toast.success('Registration successful! Please sign in.');
       setName('');
@@ -156,10 +159,25 @@ export default function LandingPage() {
             )}
           </div>
 
+          {/* --- DEMO CREDENTIALS SECTION --- */}
           {isLogin && (
-            <p className="text-xs text-muted-foreground text-center mt-4 border-t pt-2">
-              For local demo without registering, use any <strong>@vitapstudent.ac.in</strong> email with password <strong>"password"</strong>.
-            </p>
+            <div className="mt-6 p-4 bg-muted/50 rounded-lg border border-dashed border-border">
+              <h4 className="font-semibold text-sm mb-3 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                Demo Account
+              </h4>
+              <div className="space-y-3 text-xs">
+                <div className="bg-white p-2 rounded border">
+                  <p className="font-medium text-foreground mb-1">Student User</p>
+                  <p className="text-muted-foreground">
+                    Email: <span className="font-mono">demo@vitapstudent.ac.in</span>
+                  </p>
+                  <p className="text-muted-foreground">
+                    Pass: <span className="font-mono">Demo123</span>
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

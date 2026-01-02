@@ -1,5 +1,3 @@
-// App.js
-
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import axios from 'axios';
@@ -33,7 +31,7 @@ const ProtectedRoute = ({ children }) => {
       return;
     }
 
-    // Otherwise, verify the session cookie
+    // Otherwise, verify session cookie
     const checkAuth = async () => {
       try {
         const response = await axios.get(`${API}/auth/me`);

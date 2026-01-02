@@ -5,3 +5,8 @@ pydantic[email]>=2.0.0
 httpx
 beautifulsoup4
 uvicorn
+pandas
+openpyxl
+requests
+passlib[bcrypt]
+bcrypt==3.2.2

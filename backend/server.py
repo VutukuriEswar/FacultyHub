@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends
 from fastapi.responses import JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,6 +11,25 @@ from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
+import pandas as pd
+import requests
+import json
+
+# --- PASSWORD HASHING IMPORTS ---
+import bcrypt
+
+def get_password_hash(password):
+    # Hash a password for the first time
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed_password.decode('utf-8')
+
+def verify_password(plain_password, hashed_password):
+    # Check hashed password. Using utf-8
+    password_byte_enc = plain_password.encode('utf-8')
+    hash_byte_enc = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(password_byte_enc, hash_byte_enc)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -22,24 +42,38 @@ db = client[os.environ.get('DB_NAME', 'faculty_hub')]
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# --- NEW CONSTANT: VIT-AP UNIVERSITY ID ---
+VIT_INSTITUTION_LINEAGE = "i4401726783"
+
 # Models
 class User(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
     user_id: str
     email: str
     name: str
     picture: Optional[str] = None
     is_admin: bool = False
     preferences: List[str] = Field(default_factory=list)
+    ai_interests: List[str] = Field(default_factory=list)
     created_at: datetime
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     picture: Optional[str] = None
     preferences: Optional[List[str]] = None
+    ai_interests: Optional[List[str]] = None
 
 class Faculty(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
     faculty_id: str
     name: str
     department: str
@@ -48,6 +82,7 @@ class Faculty(BaseModel):
     scholar_profile: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
     research_interests: Optional[str] = None
+    openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
     avg_ratings: Dict[str, float] = Field(default_factory=lambda: {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0})
     rating_counts: Dict[str, int] = Field(default_factory=lambda: {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0})
     created_at: datetime
@@ -60,6 +95,7 @@ class FacultyCreate(BaseModel):
     scholar_profile: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
     research_interests: Optional[str] = None
+    openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
 
 class FacultyUpdate(BaseModel):
     name: Optional[str] = None
@@ -69,9 +105,10 @@ class FacultyUpdate(BaseModel):
     scholar_profile: Optional[str] = None
     publications: Optional[List[str]] = None
     research_interests: Optional[str] = None
+    openalex_projects: Optional[List[Dict[str, Any]]] = None
 
 class Rating(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
     rating_id: str
     faculty_id: str
     user_id: str
@@ -89,7 +126,7 @@ class RatingSubmit(BaseModel):
     overall: int = Field(..., ge=1, le=5)
 
 class Comment(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
     comment_id: str
     faculty_id: str
     user_id: str
@@ -110,7 +147,7 @@ class ChatMessage(BaseModel):
     created_at: datetime
 
 class Chat(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
     chat_id: str
     participants: List[str]
     messages: List[ChatMessage]
@@ -121,10 +158,146 @@ class ChatMessageCreate(BaseModel):
     recipient_id: str
     content: str
 
-# --- DEMO DATA SOURCE ---
+# --- DATA SOURCE HELPER ---
+
+def load_faculty_from_csv():
+    """Loads faculty from CSV. Uses Split/Join for comma cleanup. Maps Image correctly."""
+    file_path = ROOT_DIR / 'faculty_data.csv'
+    
+    if not file_path.exists():
+        return None
+
+    try:
+        df = pd.read_csv(file_path)
+        
+        # 1. Drop profile column
+        profile_cols = ['Profile_URL', 'Profile URL', 'Profile', 'Link']
+        for col in profile_cols:
+            if col in df.columns:
+                df = df.drop(columns=[col])
+            
+        faculty_list = []
+        
+        # Helper to find column regardless of case or spaces
+        def get_col_val(target_names):
+            for name in target_names:
+                if name in df.columns:
+                    return df[name]
+                for col in df.columns:
+                    if col.strip().lower() == name.lower():
+                        return df[col]
+            return pd.Series([None] * len(df), index=df.index)
+
+        # Extract columns with fuzzy matching
+        names = get_col_val(['Name'])
+        departments = get_col_val(['Department'])
+        designations = get_col_val(['Designation'])
+        images = get_col_val(['Image', 'Image URL', 'Profile Picture'])
+        
+        # Research Interests
+        research_ints = get_col_val(['Specialisation', 'Specialization', 'Research Interests', 'Research'])
+        
+        # Office Address
+        office_addrs = get_col_val(['Office Address', 'Address', 'Office'])
+        
+        # Common Contact Info
+        emails = get_col_val(['Email', 'Email Address'])
+        phones = get_col_val(['Phone', 'Mobile', 'Contact', 'Mobile Number'])
+
+        # Known departments for extraction logic
+        KNOWN_DEPTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
+
+        # Iterate over rows to create faculty objects
+        for index, row in df.iterrows():
+            faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"
+            
+            # --- MAPPING & CLEANING ---
+            
+            # Name (Default to "Unknown" if NaN or Empty)
+            raw_name = names.iloc[index]
+            name_val = "Unknown" if pd.isna(raw_name) or str(raw_name).strip() == "" else raw_name
+
+            # Department
+            raw_dept = departments.iloc[index]
+            dept_val = "Unknown" if pd.isna(raw_dept) else raw_dept
+
+            # Designation (SMART CLEANING)
+            raw_des = designations.iloc[index]
+            
+            # 1. Extract Dept if missing from Department column
+            if dept_val == "Unknown" and not pd.isna(raw_des) and isinstance(raw_des, str):
+                for d in KNOWN_DEPTS:
+                    if d in raw_des:
+                        dept_val = d 
+                        break
+            
+            # 2. Clean Designation using Split & Join (ROBUST FIX FOR DOUBLE COMMA)
+            if not pd.isna(raw_des) and isinstance(raw_des, str):
+                parts = raw_des.split(',')
+                # Remove empty parts (handles double comma) and remove department string
+                parts = [p.strip() for p in parts if p.strip() != str(dept_val) and p.strip() != '']
+                cleaned_des = ", ".join(parts)
+                if not cleaned_des: cleaned_des = raw_des # Fallback
+            else:
+                cleaned_des = "Unknown"
+
+            # Image (Handle NaN AND Empty Strings) - Strict Mapping
+            img_raw = images.iloc[index]
+            if pd.isna(img_raw) or str(img_raw).strip() == "":
+                img_val = None
+            else:
+                img_val = str(img_raw).strip()
+            
+            # Others
+            res_val = None if pd.isna(research_ints.iloc[index]) else research_ints.iloc[index]
+            addr_val = None if pd.isna(office_addrs.iloc[index]) else office_addrs.iloc[index]
+            email_val = None if pd.isna(emails.iloc[index]) else emails.iloc[index]
+            phone_val = None if pd.isna(phones.iloc[index]) else phones.iloc[index]
+
+            faculty_data = {
+                "faculty_id": faculty_id,
+                "name": name_val,
+                "department": dept_val,
+                "designation": cleaned_des,
+                "image_url": img_val, # STRICT KEY
+                "created_at": datetime.now(timezone.utc),
+                "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
+                "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
+                "research_interests": res_val,
+                "office_address": addr_val,
+                "email": email_val,
+                "phone": phone_val,
+            }
+            
+            # Dynamic Columns (SKIP Image URL to prevent duplication)
+            skipped_cols = ['Name', 'Department', 'Designation', 'Image', 'Image URL', 'Profile Picture', 
+                            'Specialisation', 'Specialization', 'Research Interests', 'Research', 
+                            'Office Address', 'Address', 'Office', 
+                            'Email', 'Email Address', 
+                            'Phone', 'Mobile', 'Contact', 'Mobile Number',
+                            'Profile_URL', 'Profile URL', 'Profile', 'Link']
+            
+            for col in df.columns:
+                should_skip = False
+                for skip_name in skipped_cols:
+                    if col.strip().lower() == skip_name.lower():
+                        should_skip = True
+                        break
+                if not should_skip:
+                    val = row.get(col)
+                    if pd.notna(val):
+                        faculty_data[col] = val
+            
+            faculty_list.append(faculty_data)
+            
+        return faculty_list
+        
+    except Exception as e:
+        logging.error(f"Error loading CSV: {e}")
+        return None
 
 def get_demo_faculty():
-    """Returns a static list of 70 demo faculty (10 per department)."""
+    """Returns a static list of demo faculty."""
     departments = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
     base_data = {
         'created_at': datetime.now(timezone.utc),
@@ -132,7 +305,6 @@ def get_demo_faculty():
         'rating_counts': {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0}
     }
     
-    # Generators for data to keep code concise but populated
     def gen_dept_faculty(dept, names, designations):
         facs = []
         for i, name in enumerate(names):
@@ -145,55 +317,60 @@ def get_demo_faculty():
                 "scholar_profile": None,
                 "publications": [],
                 "research_interests": f"Research in {dept}",
+                "Specialisation": f"AI & ML in {dept}",
+                "Office Address": f"Block {i+1}, Room {100+i}",
+                "Email": f"{name.split(' ')[1].lower()}@vitap.ac.in",
+                "Phone": f"+91 98765 432{i}",
+                "openalex_projects": [],
                 **base_data
             })
         return facs
 
     all_faculty = []
     
-    # SCOPE (Computer Science)
+    # SCOPE
     all_faculty.extend(gen_dept_faculty('SCOPE', [
         "Dr. Ada Lovelace", "Prof. Alan Turing", "Dr. Grace Hopper", "Prof. Donald Knuth",
         "Dr. Linus Torvalds", "Prof. Tim Berners-Lee", "Dr. Margaret Hamilton", "Prof. Dennis Ritchie",
         "Dr. Sophie Wilson", "Prof. Guido van Rossum"
     ], ["Professor", "Associate Professor", "Assistant Professor", "HOD"]))
 
-    # SENSE (Electronics)
+    # SENSE
     all_faculty.extend(gen_dept_faculty('SENSE', [
         "Dr. Nikola Tesla", "Prof. Michael Faraday", "Dr. Guglielmo Marconi", "Prof. Samuel Morse",
         "Dr. Claude Shannon", "Prof. Jack Kilby", "Dr. Robert Noyce", "Prof. Gordon Moore",
         "Dr. Andrew Grove", "Prof. Robert Hall"
     ], ["Dean", "Professor", "Associate Professor", "Assistant Professor"]))
 
-    # SMEC (Mechanical)
+    # SMEC
     all_faculty.extend(gen_dept_faculty('SMEC', [
         "Dr. Henry Ford", "Prof. Karl Benz", "Prof. Rudolf Diesel", "Dr. James Watt",
         "Prof. George Stephenson", "Dr. Isambard Brunel", "Prof. Nikolaus Otto", "Dr. Elijah McCoy",
         "Prof. Gottlieb Daimler", "Dr. Charles Kettering"
     ], ["Professor", "HOD", "Associate Professor", "Assistant Professor"]))
 
-    # SAS (Advanced Science)
+    # SAS
     all_faculty.extend(gen_dept_faculty('SAS', [
         "Dr. Marie Curie", "Prof. Albert Einstein", "Dr. Isaac Newton", "Prof. Galileo Galilei",
         "Dr. Richard Feynman", "Prof. Stephen Hawking", "Dr. Neil deGrasse Tyson", "Prof. Rosalind Franklin",
         "Dr. Dmitri Mendeleev", "Prof. Louis Pasteur"
     ], ["Senior Professor", "Professor", "Associate Professor", "Assistant Professor"]))
 
-    # VSB (Business)
+    # VSB
     all_faculty.extend(gen_dept_faculty('VSB', [
         "Dr. Peter Drucker", "Prof. Adam Smith", "Dr. Warren Buffett", "Prof. John Keynes",
         "Dr. Michael Porter", "Prof. Philip Kotler", "Dr. Jack Welch", "Prof. Henry Mintzberg",
         "Dr. Jim Collins", "Prof. Clayton Christensen"
     ], ["Professor", "Dean", "Associate Professor", "Assistant Professor"]))
 
-    # VSL (Law)
+    # VSL
     all_faculty.extend(gen_dept_faculty('VSL', [
         "Dr. Ruth Bader Ginsburg", "Prof. Oliver Wendell Holmes", "Dr. Thurgood Marshall", "Prof. Sandra Day O'Connor",
         "Dr. William Blackstone", "Prof. Hugo Black", "Dr. Learned Hand", "Prof. Benjamin Cardozo",
         "Dr. John Marshall", "Prof. Antonin Scalia"
     ], ["Senior Advocate", "Professor", "Associate Professor", "HOD"]))
 
-    # VISH (Social Science)
+    # VISH
     all_faculty.extend(gen_dept_faculty('VISH', [
         "Dr. Sigmund Freud", "Prof. Carl Jung", "Dr. B.F. Skinner", "Prof. Jean Piaget",
         "Dr. Noam Chomsky", "Prof. Jane Goodall", "Dr. Margaret Mead", "Prof. Sigmund Freud",
@@ -201,6 +378,68 @@ def get_demo_faculty():
     ], ["Professor", "Assistant Professor", "Associate Professor", "Dean"]))
 
     return all_faculty
+
+@app.on_event("startup")
+async def startup_event():
+    """Checks if DB is empty. If so, imports from CSV or loads Demo Data.
+    Also seeds Admin and Demo users if missing."""
+    
+    # 1. SEED FACULTY DATA
+    logging.info("Checking database for faculty data...")
+    count = await db.faculty.count_documents({})
+    
+    if count == 0:
+        logging.info("Database is empty. Initializing data...")
+        csv_data = load_faculty_from_csv()
+        
+        if csv_data:
+            logging.info(f"Found CSV with {len(csv_data)} records. Importing to DB...")
+            await db.faculty.insert_many(csv_data)
+            logging.info("CSV Import complete.")
+        else:
+            logging.info("No CSV found or CSV error. Loading Demo Data...")
+            demo_data = get_demo_faculty()
+            await db.faculty.insert_many(demo_data)
+            logging.info(f"Imported {len(demo_data)} demo faculty records.")
+    else:
+        logging.info(f"Database already contains {count} faculty records. Skipping import.")
+
+    # 2. SEED USERS (Admin & Demo)
+    logging.info("Checking for seeded users...")
+    
+    # Admin
+    admin_email = "admin@vitapstudent.ac.in"
+    admin_pass = "Admin123"
+    admin_doc = await db.users.find_one({"email": admin_email})
+    if not admin_doc:
+        logging.info(f"Creating Admin user: {admin_email}")
+        await db.users.insert_one({
+            "user_id": f"user_admin_{uuid.uuid4().hex[:12]}",
+            "email": admin_email,
+            "name": "System Administrator",
+            "password_hash": get_password_hash(admin_pass),
+            "is_admin": True,
+            "preferences": [],
+            "ai_interests": [],
+            "created_at": datetime.now(timezone.utc)
+        })
+    
+    # Demo
+    demo_email = "demo@vitapstudent.ac.in"
+    demo_pass = "Demo123"
+    demo_doc = await db.users.find_one({"email": demo_email})
+    if not demo_doc:
+        logging.info(f"Creating Demo user: {demo_email}")
+        await db.users.insert_one({
+            "user_id": f"user_demo_{uuid.uuid4().hex[:12]}",
+            "email": demo_email,
+            "name": "Demo User",
+            "password_hash": get_password_hash(demo_pass),
+            "is_admin": False,
+            "preferences": [],
+            "ai_interests": [],
+            "created_at": datetime.now(timezone.utc)
+        })
 
 # Auth Helper
 async def get_current_user(request: Request, session_token: Optional[str] = Cookie(None)) -> User:
@@ -231,34 +470,46 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
     return User(**user_doc)
 
 # Auth Routes
-@api_router.post("/auth/login")
-async def login_user(response: Response, login_data: dict):
-    email = login_data.get("email")
-    password = login_data.get("password")
+@api_router.post("/auth/register")
+async def register_user(user_data: UserRegister):
+    """Allows anyone with @vitapstudent.ac.in to register."""
+    if not user_data.email.endswith("@vitapstudent.ac.in"):
+        raise HTTPException(status_code=400, detail="Registration restricted to @vitapstudent.ac.in emails")
 
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="Email and password required")
+    existing_user = await db.users.find_one({"email": user_data.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    user_id = f"user_{uuid.uuid4().hex[:12]}"
+    new_user = {
+        "user_id": user_id,
+        "email": user_data.email,
+        "name": user_data.name,
+        "password_hash": get_password_hash(user_data.password),
+        "picture": None,
+        "is_admin": False, # Only pre-seeded admin is admin
+        "preferences": [],
+        "ai_interests": [],
+        "created_at": datetime.now(timezone.utc)
+    }
     
-    if not email.endswith("@vitapstudent.ac.in") or password != "password":
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    await db.users.insert_one(new_user)
+    return {"message": "User registered successfully", "user_id": user_id}
 
-    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+@api_router.post("/auth/login")
+async def login_user(response: Response, login_data: UserLogin):
+    """Login with registered credentials."""
+    user_doc = await db.users.find_one({"email": login_data.email}, {"_id": 0})
     
     if not user_doc:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        user_doc = {
-            "user_id": user_id,
-            "email": email,
-            "name": email.split('@')[0].capitalize(),
-            "picture": None,
-            "is_admin": email == "admin@vitapstudent.ac.in",
-            "preferences": [],
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(user_doc.copy())
-    else:
-        user_id = user_doc["user_id"]
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # Verify Password
+    if not verify_password(login_data.password, user_doc.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    user_id = user_doc["user_id"]
+    # Create Session
     session_token = f"sess_{uuid.uuid4().hex}"
     await db.user_sessions.insert_one({
         "user_id": user_id,
@@ -280,7 +531,9 @@ async def login_user(response: Response, login_data: dict):
     if isinstance(user_doc["created_at"], str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     
-    return User(**user_doc)
+    # Return user without password hash
+    user_response = User(**user_doc)
+    return user_response
 
 @api_router.get("/auth/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)):
@@ -294,7 +547,6 @@ async def logout(response: Response, session_token: Optional[str] = Cookie(None)
     response.delete_cookie(key="session_token", path="/")
     return {"message": "Logged out successfully"}
 
-# User Routes
 @api_router.patch("/users/me", response_model=User)
 async def update_profile(update: UserUpdate, current_user: User = Depends(get_current_user)):
     update_data = {k: v for k, v in update.model_dump().items() if v is not None}
@@ -314,45 +566,30 @@ async def update_profile(update: UserUpdate, current_user: User = Depends(get_cu
 # Faculty Routes
 @api_router.get("/faculty", response_model=List[Faculty])
 async def get_all_faculty(department: Optional[str] = None):
-    # 1. Get Demo Data
-    demo_list = get_demo_faculty()
+    query = {}
+    if department:
+        query["department"] = {"$regex": f"^{department}$", "$options": "i"}
+
+    cursor = db.faculty.find(query, {"_id": 0})
+    faculty_list = await cursor.to_list(1000)
     
-    # 2. Merge with DB Ratings (Persistence)
-    faculty_ids = [f["faculty_id"] for f in demo_list]
-    cursor = db.faculty.find({"faculty_id": {"$in": faculty_ids}}, {"_id": 0})
-    db_faculty_data = await cursor.to_list(1000)
-    
-    ratings_map = {f["faculty_id"]: f for f in db_faculty_data}
-    
-    final_list = []
-    for demo_f in demo_list:
-        if department and department.lower() not in demo_f["department"].lower():
-            continue
+    for f in faculty_list:
+        if isinstance(f["created_at"], str):
+            f["created_at"] = datetime.fromisoformat(f["created_at"])
             
-        if demo_f["faculty_id"] in ratings_map:
-            db_f = ratings_map[demo_f["faculty_id"]]
-            demo_f["avg_ratings"] = db_f.get("avg_ratings", demo_f["avg_ratings"])
-            demo_f["rating_counts"] = db_f.get("rating_counts", demo_f["rating_counts"])
-            
-        final_list.append(demo_f)
-        
-    return final_list
+    return faculty_list
 
 @api_router.get("/faculty/{faculty_id}", response_model=Faculty)
 async def get_faculty(faculty_id: str):
-    demo_list = get_demo_faculty()
-    fac = next((f for f in demo_list if f["faculty_id"] == faculty_id), None)
+    faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
     
-    if not fac:
+    if not faculty_doc:
         raise HTTPException(status_code=404, detail="Faculty not found")
 
-    # Merge ratings
-    db_fac = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
-    if db_fac:
-        fac["avg_ratings"] = db_fac.get("avg_ratings", fac["avg_ratings"])
-        fac["rating_counts"] = db_fac.get("rating_counts", fac["rating_counts"])
+    if isinstance(faculty_doc["created_at"], str):
+        faculty_doc["created_at"] = datetime.fromisoformat(faculty_doc["created_at"])
     
-    return Faculty(**fac)
+    return Faculty(**faculty_doc)
 
 @api_router.post("/faculty", response_model=Faculty)
 async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(get_current_user)):
@@ -365,12 +602,11 @@ async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(ge
         **faculty.model_dump(),
         "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
         "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "openalex_projects": [], # Initialize field
+        "created_at": datetime.now(timezone.utc)
     }
     
-    await db.faculty.insert_one(faculty_doc.copy())
-    
-    faculty_doc["created_at"] = datetime.fromisoformat(faculty_doc["created_at"])
+    await db.faculty.insert_one(faculty_doc)
     return Faculty(**faculty_doc)
 
 @api_router.patch("/faculty/{faculty_id}", response_model=Faculty)
@@ -407,22 +643,15 @@ async def delete_faculty(faculty_id: str, current_user: User = Depends(get_curre
     
     return {"message": "Faculty deleted successfully"}
 
-# Rating Routes
 @api_router.post("/faculty/{faculty_id}/ratings", response_model=Rating)
 async def submit_rating(faculty_id: str, rating: RatingSubmit, current_user: User = Depends(get_current_user)):
+    # Admins generally shouldn't rate faculty, but allowing it for now.
+    # Could block if current_user.is_admin: raise 403
+    
     faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
     
     if not faculty_doc:
-        await db.faculty.insert_one({
-            "faculty_id": faculty_id,
-            "name": "Demo Faculty", 
-            "department": "General",
-            "designation": "Faculty",
-            "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-            "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-            "created_at": datetime.now(timezone.utc)
-        })
-        faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
+        raise HTTPException(status_code=404, detail="Faculty not found")
     
     existing_rating = await db.ratings.find_one({"faculty_id": faculty_id, "user_id": current_user.user_id}, {"_id": 0})
     
@@ -433,7 +662,7 @@ async def submit_rating(faculty_id: str, rating: RatingSubmit, current_user: Use
         old_values = {k: existing_rating.get(k) for k in ["teaching", "attendance", "doubt_clarification", "overall"]}
         
         update_data = {k: v for k, v in rating.model_dump().items() if v is not None}
-        update_data["updated_at"] = now.isoformat()
+        update_data["updated_at"] = now
         
         await db.ratings.update_one(
             {"rating_id": rating_id},
@@ -472,11 +701,11 @@ async def submit_rating(faculty_id: str, rating: RatingSubmit, current_user: Use
             "faculty_id": faculty_id,
             "user_id": current_user.user_id,
             **rating.model_dump(),
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat()
+            "created_at": now,
+            "updated_at": now
         }
         
-        await db.ratings.insert_one(rating_doc.copy())
+        await db.ratings.insert_one(rating_doc)
         
         for category in ["teaching", "attendance", "doubt_clarification", "overall"]:
             val = rating.model_dump().get(category)
@@ -522,7 +751,6 @@ async def get_my_rating(faculty_id: str, current_user: User = Depends(get_curren
     
     return Rating(**rating_doc)
 
-# Comment Routes
 @api_router.get("/faculty/{faculty_id}/comments", response_model=List[Comment])
 async def get_comments(faculty_id: str):
     comments = await db.comments.find({"faculty_id": faculty_id}, {"_id": 0}).to_list(1000)
@@ -544,12 +772,12 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
         "user_picture": current_user.picture,
         "content": comment.content,
         "parent_comment_id": comment.parent_comment_id,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc)
     }
     
-    await db.comments.insert_one(comment_doc.copy())
+    await db.comments.insert_one(comment_doc)
     
-    comment_doc["created_at"] = datetime.fromisoformat(comment_doc["created_at"])
+    comment_doc["created_at"] = datetime.fromisoformat(comment_doc["created_at"].isoformat()) if isinstance(comment_doc["created_at"], str) else comment_doc
     return Comment(**comment_doc)
 
 @api_router.delete("/comments/{comment_id}")
@@ -559,13 +787,13 @@ async def delete_comment(comment_id: str, current_user: User = Depends(get_curre
     if not comment_doc:
         raise HTTPException(status_code=404, detail="Comment not found")
     
+    # Only Admins or the original author can delete
     if comment_doc["user_id"] != current_user.user_id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     
     await db.comments.delete_one({"comment_id": comment_id})
     return {"message": "Comment deleted successfully"}
 
-# Chat Routes
 @api_router.get("/chats", response_model=List[Chat])
 async def get_chats(current_user: User = Depends(get_current_user)):
     chats = await db.chats.find(
@@ -597,7 +825,7 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "sender_id": current_user.user_id,
         "content": message.content,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc)
     }
     
     if chat_doc:
@@ -621,47 +849,361 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
     
     return {"chat_id": chat_id, "message": new_message}
 
-# Recommendations
 @api_router.get("/recommendations")
 async def get_recommendations(current_user: User = Depends(get_current_user)):
-    if not current_user.preferences:
+    # Admin Logic: Admins do not need recommendations
+    if current_user.is_admin:
         return []
+
+    user_ai_interests = current_user.ai_interests or []
+    user_rating_prefs = current_user.preferences or []
     
+    if not user_rating_prefs and not user_ai_interests:
+        return []
+
     faculty_list = await get_all_faculty()
     
     recommendations = []
+    
     for fac in faculty_list:
-        total_score = 0
-        count = 0
+        # --- PART 1: PREFERENCES (RATINGS) ---
+        # Calculate Compatibility Score ONLY based on preferences (ratings)
+        rating_compatibility = 0.0
+        rating_count = 0
         
-        for pref in current_user.preferences:
+        for pref in user_rating_prefs:
             pref_key = pref.lower().replace(" ", "_")
             if pref_key in fac['avg_ratings']:
                 rating = fac['avg_ratings'][pref_key]
                 if rating > 0:
-                    total_score += rating
-                    count += 1
+                    rating_compatibility += rating
+                    rating_count += 1
         
-        if count > 0:
-            compatibility = (total_score / count) * 20
-            recommendations.append({
-                **fac, # FIX: Spread dictionary directly
-                "compatibility_percentage": round(compatibility, 1)
-            })
-    
+        # Normalize to 0-100. Max rating is 5.
+        # If user has rating preferences, score is determined by rating.
+        if rating_count > 0:
+            final_score = (rating_compatibility / rating_count) * 20 
+        else:
+            # If no rating preferences but research interests exist, we give a default high score
+            # but we handle this in Part 2 logic mostly.
+            final_score = 0 
+
+        # --- PART 2: RESEARCH INTERESTS (INTELLIGENT KEYWORD MATCHING) ---
+        # This determines IF faculty appears in list, not their score
+        match_found = False
+        reason = ""
+        
+        if user_ai_interests:
+            # Combine search text: Research Interests + All Project Titles
+            search_text = ""
+            
+            # Handle None values safely
+            res_interests = fac.get('research_interests') or ''
+            search_text += res_interests + " "
+            
+            projects = fac.get('openalex_projects') or []
+            for p in projects:
+                search_text += p.get('title', '') + " "
+            
+            search_text = search_text.lower()
+            
+            # Intelligent Matching Loop
+            for interest in user_ai_interests:
+                interest_lower = interest.lower()
+                
+                # 1. Direct Match
+                if interest_lower in search_text:
+                    match_found = True
+                    reason = f"Matched '{interest}' in Research/Projects."
+                    # Check if it was in a specific project for better feedback
+                    for p in projects:
+                        if interest_lower in p.get('title', '').lower():
+                            reason = f"Matched '{interest}' in project: '{p.get('title', '')[:30]}...'"
+                            break
+                    break
+                
+                # 2. Synonym Matching (Basic)
+                # e.g., User says "AI", faculty has "Artificial Intelligence"
+                synonyms = {
+                    "ai": "artificial intelligence",
+                    "nlp": "natural language processing",
+                    "ml": "machine learning",
+                    "iot": "internet of things"
+                }
+                
+                if interest_lower in synonyms:
+                    synonym = synonyms[interest_lower]
+                    if synonym in search_text:
+                        match_found = True
+                        reason = f"Matched '{interest}' (synonym for '{synonym}') found."
+                        break
+
+        # --- COMBINATION LOGIC ---
+        # Priority:
+        # 1. If User selected Preferences -> Score is based on Ratings (Part 1).
+        # 2. If User selected Research Interests AND Matched -> Give default score if no ratings.
+        
+        if rating_count > 0:
+            # User has ratings preferences. Score is determined by ratings (Part 1).
+            # We still keep the faculty if they matched research interests (adds to 'reason' maybe? No, user wants simple reason).
+            if match_found or rating_compatibility > 0:
+                # If research matched, update reason or append? 
+                # User requested: "tell something like word AI matched in this project"
+                if match_found:
+                    # If both matched, prioritize score (already calculated) but use Research Reason?
+                    # User said: "give the priority to rating one".
+                    # Let's keep the rating score, but maybe append the research match to reason?
+                    # Simplest approach: Use Research Reason as it's more descriptive.
+                    pass 
+                
+                recommendations.append({
+                    **fac,
+                    "compatibility_percentage": round(final_score, 1),
+                    "recommendation_reason": reason if match_found else "Highly rated in preferences."
+                })
+        else:
+            # User has NO rating preferences, only Research Interests.
+            if match_found:
+                # Give a default score for relevance (e.g., 85)
+                final_score = 85
+                recommendations.append({
+                    **fac,
+                    "compatibility_percentage": round(final_score, 1),
+                    "recommendation_reason": reason
+                })
+
+    # Sort by compatibility percentage descending
     recommendations.sort(key=lambda x: x["compatibility_percentage"], reverse=True)
+    
     return recommendations[:10]
 
-# Rankings
-# Rankings
+
+@api_router.post("/admin/sync-openalex")
+async def sync_openalex_data(current_user: User = Depends(get_current_user)):
+    """
+    Admin-only route to fetch OpenAlex projects for VIT-AP University faculty.
+    Strategy:
+    1. Clean faculty name (remove titles).
+    2. Search VIT-AP University authors.
+    3. Match Faculty Name to OpenAlex Author Name (Handling reordering & initials).
+    4. Fetch works (Filtered by VIT-AP).
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    api_key = os.environ.get('OPENALEX_API_KEY')
+    if not api_key:
+        logging.error("DEBUG: OPENALEX_API_KEY is MISSING in .env file!")
+        raise HTTPException(status_code=400, detail="OPENALEX_API_KEY not found in environment variables.")
+    
+    logging.info("Starting OpenAlex Sync (VIT-AP University Only)...")
+    
+    # 1. Get all faculty to sync
+    all_faculty_data = await db.faculty.find({}, {"_id": 0}).to_list(1000)
+    
+    updated_count = 0
+    skipped_count = 0
+    failed_count = 0
+    processed_names = []
+
+    def clean_name_string(name_str):
+        """Lowercase, remove punctuation."""
+        return name_str.lower().replace(",", "").replace(".", "").strip()
+
+    for faculty in all_faculty_data:
+        
+        # --- STEP 1: Clean Faculty Name ---
+        raw_name = faculty["name"]
+        prefixes_to_remove = [
+            "dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", 
+            "assistant professor", "associate professor", "dean", "hod"
+        ]
+        clean_faculty_name = raw_name
+        for prefix in prefixes_to_remove:
+            if clean_faculty_name.lower().startswith(prefix):
+                clean_faculty_name = clean_faculty_name[len(prefix):].strip()
+        
+        if not clean_faculty_name:
+            logging.error(f"Skipping faculty {faculty.get('name')}: Name became empty after cleaning")
+            skipped_count += 1
+            continue
+            
+        # Create a set of tokens for the faculty
+        faculty_tokens = set(clean_name_string(clean_faculty_name).split())
+        
+        if not faculty_tokens:
+            continue
+            
+        if clean_faculty_name in processed_names:
+            logging.info(f"Skipping duplicate query for: {clean_faculty_name}")
+            skipped_count += 1
+            continue
+        processed_names.append(clean_faculty_name)
+
+        target_author_id = None
+
+        try:
+            # --- STEP 2: Search for Author Affiliated with VIT-AP University ---
+            url_author_search = "https://api.openalex.org/authors"
+            params_author = {
+                "filter": f"last_known_institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
+                "search": clean_faculty_name,
+                "per_page": 10,
+                "mailto": "admin@vitapstudent.ac.in"
+            }
+            headers = {"x-api-key": api_key}
+
+            logging.info(f"Searching for '{clean_faculty_name}' in VIT-AP authors...")
+            
+            response_author = requests.get(url_author_search, params=params_author, headers=headers, timeout=15.0)
+            
+            # Search through VIT-AP authors to find name match
+            if response_author.status_code == 200 and response_author.json().get("results"):
+                data_author = response_author.json()
+                vit_authors = data_author["results"]
+                
+                found_match = False
+                for author in vit_authors:
+                    author_display = author.get("display_name", "")
+                    author_id = author.get("id", "")
+                    
+                    # --- NEW SMART MATCHING LOGIC ---
+                    author_tokens = set(clean_name_string(author_display).split())
+
+                    # 1. Exact Set Match (Handles "Anil Vitthalrao Turukmane" <-> "Turukmane Anil Vitthalrao")
+                    if faculty_tokens == author_tokens:
+                        target_author_id = author_id
+                        logging.info(f"✓ Exact Match Found: '{raw_name}' <-> '{author_display}'")
+                        found_match = True
+                        break
+                    
+                    # 2. Subset Match (Handles missing middle names)
+                    if faculty_tokens.issubset(author_tokens) or author_tokens.issubset(faculty_tokens):
+                         # Check similarity ratio loosely to avoid false positives
+                        overlap = len(faculty_tokens & author_tokens)
+                        if overlap >= min(len(faculty_tokens), len(author_tokens)):
+                            target_author_id = author_id
+                            logging.info(f"✓ Subset Match Found: '{raw_name}' <-> '{author_display}'")
+                            found_match = True
+                            break
+
+                    # 3. Initial Matching (Handles "Anil Vitthalrao Turukmane" <-> "A V Turukmane")
+                    # We verify that all full tokens in author exist in faculty
+                    full_author_tokens = [t for t in author_tokens if len(t) >1]
+                    if any(t not in faculty_tokens for t in full_author_tokens):
+                        continue # Author has a full name (e.g. "Amit") that Faculty doesn't have (e.g. "Anil")
+                    
+                    # We verify that initials in author match first letters of faculty names
+                    initial_author_tokens = [t for t in author_tokens if len(t) == 1]
+                    match_possible = True
+                    for initial in initial_author_tokens:
+                        # Check if faculty has a name starting with this initial
+                        if not any(f_token.startswith(initial) for f_token in faculty_tokens):
+                            match_possible = False
+                            break
+                    
+                    if match_possible:
+                        # Additional check: ensure the core name (longest token) matches
+                        # e.g., "Turukmane" is definitely present
+                        longest_author = max(author_tokens, key=len)
+                        if longest_author in faculty_tokens:
+                            target_author_id = author_id
+                            logging.info(f"✓ Initial Match Found: '{raw_name}' <-> '{author_display}'")
+                            found_match = True
+                            break
+                
+                if not found_match:
+                    logging.info(f"✗ Faculty '{raw_name}' NOT found in VIT-AP authors list.")
+                    skipped_count += 1
+                    continue
+            else:
+                if response_author.status_code != 200:
+                    logging.warning(f"Could not search VIT-AP authors. Status: {response_author.status_code}")
+                else:
+                    logging.info(f"No OpenAlex record found for '{clean_faculty_name}'. Skipping.")
+                skipped_count += 1
+                continue
+
+            if not target_author_id:
+                logging.info(f"✗ No author ID found for '{raw_name}' at VIT-AP. Skipping.")
+                skipped_count += 1
+                continue
+
+            # --- STEP 3: Fetch Works for the Matched Author ---
+            url_works_final = "https://api.openalex.org/works"
+
+            # --- LOGIC 2: Fetch ONLY VIT-AP works (Active) ---
+            params_final = {
+                # Filter by Author ID AND VIT-AP Institution Lineage
+                "filter": f"authorships.author.id:{target_author_id},authorships.institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
+                "per_page": 200,
+                "sort": "publication_year:desc",
+                "mailto": "admin@vitapstudent.ac.in"
+            }
+
+            logging.info(f"Fetching VIT-AP publications for {raw_name} (ID: {target_author_id})...")
+            
+            response_works = requests.get(url_works_final, params=params_final, headers=headers, timeout=15.0)
+
+            if response_works.status_code != 200:
+                logging.error(f"Error fetching works for {target_author_id}: {response_works.text[:100]}")
+                failed_count += 1
+                continue
+
+            data_works = response_works.json()
+            
+            # --- PROCESS WORKS ---
+            clean_projects = []
+            
+            if "results" in data_works and data_works["results"]:
+                raw_results = data_works["results"]
+                for res in raw_results:
+                    if isinstance(res, dict):
+                        openalex_id = str(res.get("id", ""))
+                        title = str(res.get("title", ""))
+                        year_data = res.get("publication_year")
+                        pub_year = str(year_data) if year_data else "Unknown"
+                        pub_type = str(res.get("type", "") or "article")
+                        
+                        clean_projects.append({
+                            "openalex_id": openalex_id,
+                            "title": title,
+                            "publication_year": pub_year,
+                            "type": pub_type
+                        })
+            
+            if clean_projects:
+                await db.faculty.update_one(
+                    {"faculty_id": faculty["faculty_id"]},
+                    {"$set": {"openalex_projects": clean_projects}}
+                )
+                updated_count += 1
+                logging.info(f"✓ Updated {raw_name} with {len(clean_projects)} publications.")
+            else:
+                logging.info(f"No VIT-AP publications found for {raw_name}")
+                skipped_count += 1
+
+        except Exception as e:
+            logging.error(f"Error processing faculty {faculty.get('name')}: {e}")
+            failed_count += 1
+
+    logging.info(f"OpenAlex Sync completed. Updated: {updated_count}, Skipped: {skipped_count}, Failed: {failed_count}")
+    return {
+        "message": "Sync completed",
+        "total_processed": len(all_faculty_data),
+        "updated_count": updated_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count
+    }
+
 @api_router.get("/rankings")
-async def get_rankings(department: Optional[str] = None, category: str = "overall", method: str = "weighted"):
-    faculty_list = await get_all_faculty()
+async def get_rankings(department: Optional[str] = None, category: str = "overall", method: str = "weighted", current_user: User = Depends(get_current_user)):
+    # Admin Logic: Admins do not need rankings
+    if current_user.is_admin:
+        return []
+
+    faculty_list = await get_all_faculty(department=department)
     
-    if department:
-        faculty_list = [f for f in faculty_list if department.lower() in f['department'].lower()]
-    
-    # Calculate global mean for Bayesian calculation
     total_ratings = sum(f['avg_ratings'].get(category, 0) * f['rating_counts'].get(category, 0) for f in faculty_list)
     total_count = sum(f['rating_counts'].get(category, 0) for f in faculty_list)
     mean_rating = total_ratings / total_count if total_count > 0 else 3.0
@@ -674,14 +1216,11 @@ async def get_rankings(department: Optional[str] = None, category: str = "overal
         num_ratings = fac['rating_counts'].get(category, 0)
         
         if method == "weighted":
-            # FIX: If no one has rated this professor, score is 0.0
             if num_ratings == 0:
                 score = 0.0
             else:
-                # Apply Bayesian average only if there are ratings
                 score = (avg_rating * num_ratings + C * mean_rating) / (num_ratings + C)
         else:
-            # Simple average is naturally 0 if num_ratings is 0
             score = avg_rating
         
         rankings.append({
@@ -690,7 +1229,6 @@ async def get_rankings(department: Optional[str] = None, category: str = "overal
             "rank": 0
         })
     
-    # Sort by score descending (0 scores will naturally fall to the bottom)
     rankings.sort(key=lambda x: x["score"], reverse=True)
     
     for i, ranking in enumerate(rankings, 1):
