@@ -220,6 +220,7 @@ function StudentDashboard({ user }) {
       const facultyRes = await axios.get(`${API}/faculty`);
       setAllFaculty(facultyRes.data);
 
+      // Only fetch recommendations if we have filters active
       if (preferences.length > 0 || aiInterests.length > 0) {
         const recsRes = await axios.get(`${API}/recommendations`);
         setRecommendations(recsRes.data);
@@ -232,7 +233,7 @@ function StudentDashboard({ user }) {
     } finally {
       setLoading(false);
     }
-  }, [preferences, aiInterests]);
+  }, [preferences, aiInterests]); // Re-run when these change
 
   useEffect(() => {
     loadData();
@@ -245,6 +246,8 @@ function StudentDashboard({ user }) {
         ai_interests: aiInterests
       });
       toast.success('Preferences updated successfully');
+      // Reload data immediately to show new recommendations
+      await loadData();
     } catch (error) {
       console.error('Error updating preferences:', error);
       toast.error('Failed to update preferences');
@@ -282,12 +285,21 @@ function StudentDashboard({ user }) {
     f.department.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // State flags for UI switching
   const showSearch = searchQuery.length > 0;
-  const showAiRecommendations = aiInterests.length > 0;
-  const showRatingRecommendations = !showAiRecommendations && preferences.length > 0;
-  const showAllFaculty = !showSearch && !showAiRecommendations && !showRatingRecommendations;
+  const showAiRecommendations = aiInterests.length > 0 && preferences.length === 0;
+  const showRatingRecommendations = preferences.length > 0 && aiInterests.length === 0;
+  const showMixedRecommendations = preferences.length > 0 && aiInterests.length > 0;
+  const showAllFaculty = !showSearch && !showAiRecommendations && !showRatingRecommendations && !showMixedRecommendations;
 
-  const displayFaculty = showSearch ? filteredFaculty : (showAiRecommendations ? recommendations : (showRatingRecommendations ? recommendations : allFaculty));
+  const displayFaculty = showSearch
+    ? filteredFaculty
+    : (showAiRecommendations || showRatingRecommendations || showMixedRecommendations)
+      ? recommendations
+      : allFaculty;
+
+  // Determine if we should show the score (Show only for Rating Prefs)
+  const showCompatibilityScore = showRatingRecommendations || showMixedRecommendations;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
@@ -416,13 +428,13 @@ function StudentDashboard({ user }) {
             </h2>
           )}
 
-          {showRatingRecommendations && !showSearch && (
+          {(showRatingRecommendations || showMixedRecommendations) && (
             <h2 className="text-2xl font-bold mb-4" data-testid="recommended-header">
-              Recommended For You (Based on Ratings)
+              Recommended For You
             </h2>
           )}
 
-          {!showSearch && !showAiRecommendations && !showRatingRecommendations && (
+          {!showSearch && !showAiRecommendations && !showRatingRecommendations && !showMixedRecommendations && (
             <h2 className="text-2xl font-bold mb-4" data-testid="all-faculty-header">
               All Faculty
             </h2>
@@ -460,7 +472,7 @@ function StudentDashboard({ user }) {
                       </div>
                     </div>
 
-                    {/* AI REASON BADGE */}
+                    {/* AI REASON BADGE (Shown for AI-only or Mixed) */}
                     {showAiRecommendations && faculty.recommendation_reason && (
                       <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md text-xs">
                         <p className="font-semibold text-blue-900 mb-1">Why you?</p>
@@ -484,7 +496,9 @@ function StudentDashboard({ user }) {
                         </div>
                       </div>
 
-                      {faculty.compatibility_percentage !== undefined && (
+                      {/* COMPATIBILITY SCORE BADGE */}
+                      {/* Only show if Rating Prefs are involved */}
+                      {showCompatibilityScore && faculty.compatibility_percentage !== undefined && (
                         <div className="mt-3 pt-3 border-t border-border">
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-medium text-primary">Compatibility</span>

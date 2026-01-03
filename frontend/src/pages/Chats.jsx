@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
+import { io } from "socket.io-client";
 import { ArrowLeft, Send, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -11,88 +12,175 @@ import { toast } from 'sonner';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Initialize socket globally
+const socket = io(BACKEND_URL, {
+  transports: ['websocket', 'polling'],
+  withCredentials: true
+});
+
 export default function Chats({ user }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [chats, setChats] = useState([]);
   const [selectedChat, setSelectedChat] = useState(null);
-  const [newMessage, setNewMessage] = useState('');
+  const [newMessage, setNewMessage] = useState(location.state?.initialMessage || '');
   const [loading, setLoading] = useState(true);
-  const [users, setUsers] = useState({});
 
-  const loadChats = async () => {
+  const loadChats = useCallback(async () => {
     try {
-      if (chats.length === 0) setLoading(true);
-
+      setLoading(true);
       const response = await axios.get(`${API}/chats`);
-      setChats(response.data);
-
-      if (selectedChat) {
-        const updatedChat = response.data.find(c => c.chat_id === selectedChat.chat_id);
-        if (updatedChat) {
-          setSelectedChat(updatedChat);
-        }
+      // Guard against null response
+      if (Array.isArray(response.data)) {
+        setChats(response.data);
+      } else {
+        setChats([]);
       }
-
-      const userIds = new Set();
-      response.data.forEach(chat => {
-        chat.participants.forEach(p => userIds.add(p));
-      });
     } catch (error) {
       console.error('Error loading chats:', error);
-      if (chats.length === 0) toast.error('Failed to load chats');
+      toast.error('Failed to load chats');
+      setChats([]);
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    loadChats();
-
-    if (location.state?.recipientId) {
-      const existingChat = chats.find(c => c.participants.includes(location.state.recipientId));
-      if (existingChat) {
-        setSelectedChat(existingChat);
-      }
-    }
   }, []);
 
+  // EFFECT 1: INITIAL LOAD
   useEffect(() => {
-    const interval = setInterval(() => {
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      loadChats();
-    }, 3000);
+    loadChats();
+  }, [loadChats]);
 
-    return () => clearInterval(interval);
-  }, [selectedChat]);
+  // EFFECT 2: HANDLE RECIPIENT SELECTION FROM URL STATE
+  useEffect(() => {
+    if (location.state?.recipientId && chats.length > 0) {
+      const existingChat = chats.find(c =>
+        c.participants && c.participants.some((p) => p.user_id === location.state.recipientId)
+      );
+      if (existingChat) {
+        setSelectedChat(existingChat);
+        // Clear the location state to prevent re-triggering
+        window.history.replaceState({}, document.title);
+      }
+    }
+  }, [chats, location.state?.recipientId]);
+
+  // EFFECT 3: SOCKET LISTENERS (Runs ONCE)
+  useEffect(() => {
+    socket.on('connect', () => {
+      console.log('Connected to WebSocket');
+    });
+
+    socket.on('message', (message) => {
+      console.log('New message received:', message);
+
+      // 1. Update the specific chat in the sidebar list
+      setChats(prevChats => {
+        const chatIndex = prevChats.findIndex(c => c.chat_id === message.chat_id);
+        if (chatIndex !== -1) {
+          const updatedChats = [...prevChats];
+          // Safety check: ensure chat object exists
+          if (updatedChats[chatIndex]) {
+            updatedChats[chatIndex] = {
+              ...updatedChats[chatIndex],
+              // Safely access existing messages
+              messages: [...(updatedChats[chatIndex].messages || []), message]
+            };
+          }
+          return updatedChats;
+        }
+        return prevChats;
+      });
+
+      // 2. Update the currently open chat view
+      setSelectedChat(prev => {
+        // Only update if this is the active chat
+        if (prev && prev.chat_id === message.chat_id) {
+          return {
+            ...prev,
+            messages: [...(prev.messages || []), message]
+          };
+        }
+        return prev;
+      });
+    });
+
+    return () => {
+      socket.off('connect');
+      socket.off('message');
+    };
+  }, []); // Empty deps: Run once on mount
 
   const handleSendMessage = async () => {
     if (!newMessage.trim()) return;
 
-    const recipientId = location.state?.recipientId ||
-      selectedChat?.participants.find(p => p !== user.user_id);
+    // Determine recipient
+    let recipientId = location.state?.recipientId;
+
+    if (!recipientId && selectedChat) {
+      const other = selectedChat.participants.find((p) => p.user_id !== user.user_id);
+      recipientId = other?.user_id;
+    }
 
     if (!recipientId) {
       toast.error('No recipient selected');
       return;
     }
 
+    const tempMsg = {
+      message_id: `temp_${Date.now()}`,
+      sender_id: user.user_id,
+      sender_anonymous_id: "You",
+      content: newMessage,
+      created_at: new Date()
+    };
+
+    // Optimistic UI Update
+    setSelectedChat(prev => {
+      // If no chat selected (e.g. new chat), create a dummy shell for UI
+      if (!prev) {
+        return {
+          chat_id: 'temp_new',
+          participants: [], // Empty for now until API confirms
+          messages: [tempMsg]
+        };
+      }
+      return {
+        ...prev,
+        messages: [...(prev.messages || []), tempMsg]
+      };
+    });
+
+    const contentToSend = newMessage;
+    setNewMessage('');
+
     try {
       await axios.post(`${API}/chats/messages`, {
         recipient_id: recipientId,
-        content: newMessage
+        content: contentToSend
       });
-      setNewMessage('');
-      loadChats();
+      // Socket event will update state with the real message (with correct chat_id)
+      // If it was a new chat, we might need to refresh the list or wait for socket
+      if (!selectedChat) {
+        loadChats();
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message');
+      // Revert optimistic update
+      setSelectedChat(prev => {
+        if (!prev) return null; // Shouldn't happen if we just set it
+        return {
+          ...prev,
+          messages: prev.messages.filter(m => m.message_id !== tempMsg.message_id)
+        };
+      });
+      setNewMessage(contentToSend); // Restore text
     }
   };
 
-  const getOtherParticipantId = (chat) => {
-    return chat.participants.find(p => p !== user.user_id);
+  const getOtherParticipant = (chat) => {
+    if (!chat || !chat.participants) return null;
+    return chat.participants.find((p) => p.user_id !== user.user_id);
   };
 
   return (
@@ -114,6 +202,7 @@ export default function Chats({ user }) {
           </div>
         ) : (
           <div className="grid md:grid-cols-3 gap-6 h-[600px]">
+            {/* --- CHAT LIST SIDEBAR --- */}
             <Card className="md:col-span-1" data-testid="chat-list">
               <CardHeader>
                 <CardTitle>Conversations</CardTitle>
@@ -121,12 +210,16 @@ export default function Chats({ user }) {
               <CardContent className="space-y-2 overflow-y-auto h-[500px]">
                 {chats.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8" data-testid="no-chats-message">
-                    No conversations yet. Start chatting by clicking the chat button on any comment.
+                    No conversations yet. Start chatting by clicking chat button on any comment.
                   </p>
                 ) : (
                   chats.map(chat => {
-                    const otherUserId = getOtherParticipantId(chat);
-                    const lastMessage = chat.messages[chat.messages.length - 1];
+                    const otherParticipant = getOtherParticipant(chat);
+                    // Safety check for messages array
+                    const messagesList = chat.messages || [];
+                    const lastMessage = messagesList.length > 0
+                      ? messagesList[messagesList.length - 1]
+                      : null;
 
                     return (
                       <div
@@ -140,10 +233,14 @@ export default function Chats({ user }) {
                       >
                         <div className="flex items-center gap-3">
                           <Avatar>
-                            <AvatarFallback>{otherUserId.charAt(0)}</AvatarFallback>
+                            <AvatarFallback>
+                              {otherParticipant?.anonymous_chat_id?.charAt(0) || '?'}
+                            </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm truncate">User {otherUserId.slice(-6)}</p>
+                            <p className="font-semibold text-sm truncate">
+                              {otherParticipant?.anonymous_chat_id || 'Unknown'}
+                            </p>
                             <p className="text-xs text-muted-foreground truncate">
                               {lastMessage?.content || 'No messages'}
                             </p>
@@ -156,15 +253,22 @@ export default function Chats({ user }) {
               </CardContent>
             </Card>
 
+            {/* --- ACTIVE CHAT WINDOW --- */}
             <Card className="md:col-span-2" data-testid="chat-window">
               {selectedChat || location.state?.recipientId ? (
                 <>
                   <CardHeader className="border-b">
-                    <CardTitle>Chat</CardTitle>
+                    <CardTitle>
+                      {selectedChat
+                        ? (getOtherParticipant(selectedChat)?.anonymous_chat_id || 'Chat')
+                        : 'New Chat'
+                      }
+                    </CardTitle>
                   </CardHeader>
                   <CardContent className="p-0 flex flex-col h-[500px]">
                     <div className="flex-1 overflow-y-auto p-6 space-y-4" data-testid="messages-container">
-                      {selectedChat?.messages.map(msg => {
+                      {/* Safety: Use optional chaining for messages */}
+                      {(selectedChat?.messages || []).map(msg => {
                         const isMe = msg.sender_id === user.user_id;
                         return (
                           <div
@@ -179,9 +283,14 @@ export default function Chats({ user }) {
                                 }`}
                             >
                               <p className="text-sm">{msg.content}</p>
-                              <p className="text-xs opacity-70 mt-1">
-                                {new Date(msg.created_at).toLocaleTimeString()}
-                              </p>
+                              <div className="flex items-center justify-between gap-2 mt-1">
+                                <p className="text-[10px] opacity-70 font-mono">
+                                  {isMe ? 'You' : (msg.sender_anonymous_id || 'Unknown')}
+                                </p>
+                                <p className="text-xs opacity-70">
+                                  {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
                             </div>
                           </div>
                         );

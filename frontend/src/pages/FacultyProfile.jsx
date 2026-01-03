@@ -20,8 +20,10 @@ const RATING_CATEGORIES = [
 ];
 
 export default function FacultyProfile({ user }) {
+  // FIX: Changed back to 'facultyId' to match App.js route <Route path="/faculty/:facultyId" ... />
   const { facultyId } = useParams();
   const navigate = useNavigate();
+
   const [faculty, setFaculty] = useState(null);
   const [myRating, setMyRating] = useState(null);
   const [comments, setComments] = useState([]);
@@ -35,9 +37,10 @@ export default function FacultyProfile({ user }) {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
+      // FIX: Updated API calls to use ${facultyId}
       const [facultyRes, ratingRes, commentsRes] = await Promise.all([
         axios.get(`${API}/faculty/${facultyId}`),
-        axios.get(`${API}/faculty/${facultyId}/ratings/me`),
+        axios.get(`${API}/faculty/${facultyId}/ratings/me`, { withCredentials: true }),
         axios.get(`${API}/faculty/${facultyId}/comments`)
       ]);
 
@@ -72,7 +75,11 @@ export default function FacultyProfile({ user }) {
     }
 
     try {
-      await axios.post(`${API}/faculty/${facultyId}/ratings`, tempRatings);
+      await axios.post(
+        `${API}/faculty/${facultyId}/ratings`,
+        tempRatings,
+        { withCredentials: true }
+      );
       toast.success('Rating submitted successfully');
       loadData();
     } catch (error) {
@@ -85,10 +92,14 @@ export default function FacultyProfile({ user }) {
     if (!newComment.trim()) return;
 
     try {
-      await axios.post(`${API}/faculty/${facultyId}/comments`, {
-        content: newComment,
-        parent_comment_id: replyingTo
-      });
+      await axios.post(
+        `${API}/faculty/${facultyId}/comments`,
+        {
+          content: newComment,
+          parent_comment_id: replyingTo
+        },
+        { withCredentials: true }
+      );
       setNewComment('');
       setReplyingTo(null);
       toast.success('Comment posted');
@@ -100,7 +111,7 @@ export default function FacultyProfile({ user }) {
   };
 
   const handleStartChat = (recipientId) => {
-    navigate('/chats', { state: { recipientId } });
+    navigate('/chats', { state: { recipientId, initialMessage: '' } });
   };
 
   const renderStars = (category, value) => {
@@ -109,7 +120,7 @@ export default function FacultyProfile({ user }) {
         {[1, 2, 3, 4, 5].map(star => (
           <Star
             key={star}
-            className={`w-6 h-6 ${star <= (value || 0) ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`}
+            className={`w-6 h-6 cursor-pointer ${star <= (value || 0) ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`}
             onClick={() => setTempRatings(prev => ({ ...prev, [category]: star }))}
           />
         ))}
@@ -122,30 +133,21 @@ export default function FacultyProfile({ user }) {
 
   // --- STRICT FIELD DEFINITIONS ---
 
-  // Fields that should NEVER be shown (System/Internal fields)
   const SYSTEM_FIELDS = [
     'faculty_id', 'name', 'department', 'designation',
     'scholar_profile', 'publications', 'research_interests', 'office_address',
     'email', 'phone',
     'avg_ratings', 'rating_counts', 'created_at', 'updated_at',
     'openalex_projects', 'recommendation_reason',
-    'image_url', 'Image URL', 'Image', 'Profile Picture', 'Profile_Picture' // Hide all variations
+    'image_url', 'Image URL', 'Image', 'Profile Picture', 'Profile_Picture'
   ];
 
-  // Helper to check if a key is a system field
   const isSystemField = (key) => {
     if (SYSTEM_FIELDS.includes(key)) return true;
-
     const lowerKey = key.toLowerCase();
-    if (lowerKey.includes('image') || lowerKey.includes('picture') || lowerKey.includes('url')) {
-      return true;
-    }
-
+    if (lowerKey.includes('image') || lowerKey.includes('picture') || lowerKey.includes('url')) return true;
     return false;
   };
-
-  // Helper to check if a key is a display field (public/excel data)
-  const isDisplayField = (key) => !isSystemField(key);
 
   const renderDetailsList = (data) => {
     if (!data) return [];
@@ -167,6 +169,14 @@ export default function FacultyProfile({ user }) {
         );
       })
       .filter(item => item !== null);
+  };
+
+  const displayResearchInterests = () => {
+    if (!faculty.research_interests) return null;
+    if (Array.isArray(faculty.research_interests)) {
+      return faculty.research_interests.join(', ');
+    }
+    return faculty.research_interests;
   };
 
   if (loading) {
@@ -197,20 +207,13 @@ export default function FacultyProfile({ user }) {
         <Card className="mb-8" data-testid="faculty-profile-card">
           <CardContent className="p-8">
             <div className="flex flex-col md:flex-row gap-8">
-
-              {/* --- UPDATED PROFILE IMAGE SECTION --- */}
               <Avatar className="w-32 h-32 h-auto border-2 border-border">
-                {/* 
-                   1. src={faculty.image_url}: Uses the URL fetched from backend
-                   2. onLoadingError: Hides the image if it fails, showing the Fallback (Initials)
-                   3. className="object-cover": Ensures the image fills the circle without stretching
-                */}
                 <AvatarImage
                   src={faculty.image_url}
                   alt={faculty.name}
                   className="object-cover"
                   onLoadingError={(e) => {
-                    e.currentTarget.style.display = 'none'; // Hide broken image
+                    e.currentTarget.style.display = 'none';
                   }}
                 />
                 <AvatarFallback className="text-3xl bg-primary/10 text-primary">
@@ -225,7 +228,6 @@ export default function FacultyProfile({ user }) {
                   <Badge className="mb-4">{faculty.department}</Badge>
                 </div>
 
-                {/* Email & Phone - Prioritized Contact Info */}
                 <div className="flex flex-wrap gap-4">
                   {faculty.email && (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -241,7 +243,6 @@ export default function FacultyProfile({ user }) {
                   )}
                 </div>
 
-                {/* Office Address */}
                 {faculty.office_address && (
                   <div className="flex items-start gap-2">
                     <MapPin className="w-4 h-4 text-muted-foreground mt-1" />
@@ -252,23 +253,11 @@ export default function FacultyProfile({ user }) {
                   </div>
                 )}
 
-                {/* Research Interests / Specialisation */}
                 {faculty.research_interests && (
                   <div>
                     <h3 className="font-semibold mb-1">Research Interests</h3>
-                    <p className="text-sm text-muted-foreground">{faculty.research_interests}</p>
+                    <p className="text-sm text-muted-foreground">{displayResearchInterests()}</p>
                   </div>
-                )}
-
-                {faculty.scholar_profile && (
-                  <a
-                    href={faculty.scholar_profile}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline text-sm inline-block"
-                  >
-                    View Google Scholar Profile →
-                  </a>
                 )}
               </div>
 
@@ -288,7 +277,7 @@ export default function FacultyProfile({ user }) {
               </div>
             </div>
 
-            {/* --- UPDATED SECTION: OPENALEX PROJECTS WITH PAGINATION --- */}
+            {/* OpenAlex Projects */}
             {faculty.openalex_projects && faculty.openalex_projects.length > 0 ? (
               <div className="mt-8 pt-6 border-t border-border">
                 <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
@@ -305,7 +294,6 @@ export default function FacultyProfile({ user }) {
                       className="group p-4 bg-white border border-border rounded-lg shadow-sm hover:shadow-md transition-all duration-300 hover:border-primary/50"
                     >
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                        {/* Left: Type and Title */}
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
                             <Badge variant="secondary" className="text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 bg-slate-100 text-slate-600">
@@ -319,8 +307,6 @@ export default function FacultyProfile({ user }) {
                             {project.title || "Untitled Project"}
                           </h4>
                         </div>
-
-                        {/* Right: View Button */}
                         <a
                           href={`https://openalex.org/work/${project.openalex_id}`}
                           target="_blank"
@@ -335,7 +321,6 @@ export default function FacultyProfile({ user }) {
                   ))}
                 </div>
 
-                {/* View All / Show Less Button */}
                 {faculty.openalex_projects.length > 10 && (
                   <div className="mt-6 flex justify-center">
                     <Button
@@ -360,7 +345,7 @@ export default function FacultyProfile({ user }) {
               </div>
             )}
 
-            {/* DYNAMIC "EVERYTHING" SECTION */}
+            {/* DYNAMIC ADDITIONAL DETAILS */}
             {renderDetailsList(faculty).length > 0 && (
               <div className="mt-8 pt-6 border-t border-border">
                 <h3 className="text-xl font-semibold mb-4">Additional Details</h3>
@@ -378,13 +363,24 @@ export default function FacultyProfile({ user }) {
             <CardTitle>Rate This Professor</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {!user && (
+              <div className="p-3 bg-orange-50 border border-orange-200 rounded-md flex items-center gap-2 text-sm text-orange-800">
+                <span className="font-bold">Login Required</span>
+                <span>Please login to rate and comment.</span>
+              </div>
+            )}
             {RATING_CATEGORIES.map(cat => (
               <div key={cat.key} className="flex items-center justify-between">
                 <span className="font-medium">{cat.label} {cat.key === 'overall' && '*'}</span>
                 {renderStars(cat.key, tempRatings[cat.key])}
               </div>
             ))}
-            <Button onClick={handleRatingSubmit} className="w-full" data-testid="submit-rating-button">
+            <Button
+              onClick={handleRatingSubmit}
+              className="w-full"
+              data-testid="submit-rating-button"
+              disabled={!user}
+            >
               {myRating ? 'Update Rating' : 'Submit Rating'}
             </Button>
           </CardContent>
@@ -396,7 +392,6 @@ export default function FacultyProfile({ user }) {
             <CardTitle>Student Reviews</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Comment Input */}
             <div className="space-y-2">
               {replyingTo && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -408,30 +403,43 @@ export default function FacultyProfile({ user }) {
                 </div>
               )}
               <Textarea
-                placeholder="Share your experience..."
+                placeholder={myRating ? "Share your experience..." : "You must rate this professor to comment."}
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
                 rows={3}
+                disabled={!myRating && user}
+                readOnly={!user}
                 data-testid="comment-input"
               />
-              <Button onClick={handleCommentSubmit} className="w-full" data-testid="post-comment-button">
+              <Button
+                onClick={handleCommentSubmit}
+                className="w-full"
+                data-testid="post-comment-button"
+                disabled={!myRating && user}
+              >
                 <Send className="w-4 h-4 mr-2" />
                 Post Comment
               </Button>
             </div>
 
-            {/* Comments List */}
             <div className="space-y-4">
               {topLevelComments.map(comment => (
                 <div key={comment.comment_id} className="space-y-3" data-testid={`comment-${comment.comment_id}`}>
                   <div className="flex gap-3">
                     <Avatar className="w-10 h-10">
                       <AvatarImage src={comment.user_picture} />
-                      <AvatarFallback>{comment.user_name.charAt(0)}</AvatarFallback>
+                      <AvatarFallback>
+                        {comment.anonymous_handle
+                          ? comment.anonymous_handle.charAt(comment.anonymous_handle.length - 1)
+                          : (comment.user_name ? comment.user_name.charAt(0) : '?')
+                        }
+                      </AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="font-semibold text-sm">{comment.user_name}</span>
+                        <span className="font-semibold text-sm">
+                          {comment.anonymous_handle || comment.user_name}
+                        </span>
                         <span className="text-xs text-muted-foreground">
                           {new Date(comment.created_at).toLocaleDateString()}
                         </span>
@@ -443,11 +451,12 @@ export default function FacultyProfile({ user }) {
                           size="sm"
                           onClick={() => setReplyingTo(comment.comment_id)}
                           data-testid={`reply-button-${comment.comment_id}`}
+                          disabled={!user || !myRating}
                         >
                           <Reply className="w-3 h-3 mr-1" />
                           Reply
                         </Button>
-                        {comment.user_id !== user.user_id && (
+                        {comment.user_id !== user?.user_id && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -462,23 +471,29 @@ export default function FacultyProfile({ user }) {
                     </div>
                   </div>
 
-                  {/* Replies */}
                   {getReplies(comment.comment_id).map(reply => (
                     <div key={reply.comment_id} className="comment-reply ml-12" data-testid={`reply-${reply.comment_id}`}>
                       <div className="flex gap-3">
                         <Avatar className="w-8 h-8">
                           <AvatarImage src={reply.user_picture} />
-                          <AvatarFallback>{reply.user_name.charAt(0)}</AvatarFallback>
+                          <AvatarFallback>
+                            {reply.anonymous_handle
+                              ? reply.anonymous_handle.charAt(reply.anonymous_handle.length - 1)
+                              : (reply.user_name ? reply.user_name.charAt(0) : '?')
+                            }
+                          </AvatarFallback>
                         </Avatar>
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="font-semibold text-sm">{reply.user_name}</span>
+                            <span className="font-semibold text-sm">
+                              {reply.anonymous_handle || reply.user_name}
+                            </span>
                             <span className="text-xs text-muted-foreground">
                               {new Date(reply.created_at).toLocaleDateString()}
                             </span>
                           </div>
                           <p className="text-sm mb-2">{reply.content}</p>
-                          {reply.user_id !== user.user_id && (
+                          {reply.user_id !== user?.user_id && (
                             <Button
                               variant="ghost"
                               size="sm"

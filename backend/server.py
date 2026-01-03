@@ -1,32 +1,34 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends
-from fastapi.responses import JSONResponse
-from fastapi.concurrency import run_in_threadpool
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict, EmailStr
-from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone, timedelta
-import pandas as pd
-import requests
+import random
 import json
+import requests
+import pandas as pd
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Any
 
-# --- PASSWORD HASHING IMPORTS ---
+from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 import bcrypt
 
+# --- WEBSOCKET IMPORTS ---
+import socketio
+from fastapi.staticfiles import StaticFiles
+
+# --- PASSWORD HASHING IMPORTS ---
 def get_password_hash(password):
-    # Hash a password for the first time
     pwd_bytes = password.encode('utf-8')
     salt = bcrypt.gensalt()
     hashed_password = bcrypt.hashpw(pwd_bytes, salt)
     return hashed_password.decode('utf-8')
 
 def verify_password(plain_password, hashed_password):
-    # Check hashed password. Using utf-8
     password_byte_enc = plain_password.encode('utf-8')
     hash_byte_enc = hashed_password.encode('utf-8')
     return bcrypt.checkpw(password_byte_enc, hash_byte_enc)
@@ -39,13 +41,21 @@ mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'faculty_hub')]
 
+# --- WEBSOCKET SETUP ---
+_cors_env = os.environ.get('CORS_ORIGINS', 'http://localhost:3000')
+cors_origins = _cors_env.split(',')
+
+# Create a Socket.IO async server
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=cors_origins)
 app = FastAPI()
+socket_app = socketio.ASGIApp(sio, app)
+
 api_router = APIRouter(prefix="/api")
 
-# --- NEW CONSTANT: VIT-AP UNIVERSITY ID ---
 VIT_INSTITUTION_LINEAGE = "i4401726783"
 
-# Models
+# --- MODELS ---
+
 class User(BaseModel):
     model_config = ConfigDict(extra="allow")
     user_id: str
@@ -56,6 +66,11 @@ class User(BaseModel):
     preferences: List[str] = Field(default_factory=list)
     ai_interests: List[str] = Field(default_factory=list)
     created_at: datetime
+    # UNIFIED ANONYMOUS ID
+    anonymous_id: Optional[str] = None 
+    # Legacy fields for backwards compatibility
+    anonymous_chat_id: Optional[str] = None
+    anonymous_comment_id: Optional[str] = None
 
 class UserRegister(BaseModel):
     email: EmailStr
@@ -81,7 +96,7 @@ class Faculty(BaseModel):
     image_url: Optional[str] = None
     scholar_profile: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
-    research_interests: Optional[str] = None
+    research_interests: List[str] = Field(default_factory=list) # List in New Code
     openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
     avg_ratings: Dict[str, float] = Field(default_factory=lambda: {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0})
     rating_counts: Dict[str, int] = Field(default_factory=lambda: {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0})
@@ -130,7 +145,8 @@ class Comment(BaseModel):
     comment_id: str
     faculty_id: str
     user_id: str
-    user_name: str
+    user_name: str 
+    anonymous_handle: str 
     user_picture: Optional[str] = None
     content: str
     parent_comment_id: Optional[str] = None
@@ -143,13 +159,14 @@ class CommentCreate(BaseModel):
 class ChatMessage(BaseModel):
     message_id: str
     sender_id: str
+    sender_anonymous_id: str 
     content: str
     created_at: datetime
 
 class Chat(BaseModel):
     model_config = ConfigDict(extra="allow")
     chat_id: str
-    participants: List[str]
+    participants: List[Dict[str, str]] 
     messages: List[ChatMessage]
     created_at: datetime
     updated_at: datetime
@@ -158,10 +175,12 @@ class ChatMessageCreate(BaseModel):
     recipient_id: str
     content: str
 
-# --- DATA SOURCE HELPER ---
-
 def load_faculty_from_csv():
-    """Loads faculty from CSV. Uses Split/Join for comma cleanup. Maps Image correctly."""
+    """
+    Loads faculty from CSV using ROBUST logic.
+    Ensures research_interests is a List.
+    Prevents CSV from overwriting generated faculty_id.
+    """
     file_path = ROOT_DIR / 'faculty_data.csv'
     
     if not file_path.exists():
@@ -170,7 +189,7 @@ def load_faculty_from_csv():
     try:
         df = pd.read_csv(file_path)
         
-        # 1. Drop profile column
+        # Drop profile column
         profile_cols = ['Profile_URL', 'Profile URL', 'Profile', 'Link']
         for col in profile_cols:
             if col in df.columns:
@@ -188,32 +207,23 @@ def load_faculty_from_csv():
                         return df[col]
             return pd.Series([None] * len(df), index=df.index)
 
-        # Extract columns with fuzzy matching
+        # Extract columns
         names = get_col_val(['Name'])
         departments = get_col_val(['Department'])
         designations = get_col_val(['Designation'])
         images = get_col_val(['Image', 'Image URL', 'Profile Picture'])
-        
-        # Research Interests
         research_ints = get_col_val(['Specialisation', 'Specialization', 'Research Interests', 'Research'])
-        
-        # Office Address
         office_addrs = get_col_val(['Office Address', 'Address', 'Office'])
-        
-        # Common Contact Info
         emails = get_col_val(['Email', 'Email Address'])
         phones = get_col_val(['Phone', 'Mobile', 'Contact', 'Mobile Number'])
 
-        # Known departments for extraction logic
         KNOWN_DEPTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
 
-        # Iterate over rows to create faculty objects
         for index, row in df.iterrows():
+            # --- GENERATE ID FIRST ---
             faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"
             
-            # --- MAPPING & CLEANING ---
-            
-            # Name (Default to "Unknown" if NaN or Empty)
+            # Name
             raw_name = names.iloc[index]
             name_val = "Unknown" if pd.isna(raw_name) or str(raw_name).strip() == "" else raw_name
 
@@ -221,66 +231,73 @@ def load_faculty_from_csv():
             raw_dept = departments.iloc[index]
             dept_val = "Unknown" if pd.isna(raw_dept) else raw_dept
 
-            # Designation (SMART CLEANING)
+            # Designation
             raw_des = designations.iloc[index]
-            
-            # 1. Extract Dept if missing from Department column
             if dept_val == "Unknown" and not pd.isna(raw_des) and isinstance(raw_des, str):
                 for d in KNOWN_DEPTS:
                     if d in raw_des:
                         dept_val = d 
                         break
             
-            # 2. Clean Designation using Split & Join (ROBUST FIX FOR DOUBLE COMMA)
             if not pd.isna(raw_des) and isinstance(raw_des, str):
                 parts = raw_des.split(',')
-                # Remove empty parts (handles double comma) and remove department string
                 parts = [p.strip() for p in parts if p.strip() != str(dept_val) and p.strip() != '']
                 cleaned_des = ", ".join(parts)
-                if not cleaned_des: cleaned_des = raw_des # Fallback
+                if not cleaned_des: cleaned_des = raw_des
             else:
                 cleaned_des = "Unknown"
 
-            # Image (Handle NaN AND Empty Strings) - Strict Mapping
+            # Image
             img_raw = images.iloc[index]
             if pd.isna(img_raw) or str(img_raw).strip() == "":
                 img_val = None
             else:
                 img_val = str(img_raw).strip()
             
-            # Others
+            # Research Interests (Convert String to List)
             res_val = None if pd.isna(research_ints.iloc[index]) else research_ints.iloc[index]
+            research_list = []
+            if res_val and pd.notna(res_val):
+                raw_res_str = str(res_val).strip()
+                if raw_res_str.upper() != "N/A":
+                    research_list = [s.strip() for s in raw_res_str.split(',')]
+
             addr_val = None if pd.isna(office_addrs.iloc[index]) else office_addrs.iloc[index]
             email_val = None if pd.isna(emails.iloc[index]) else emails.iloc[index]
             phone_val = None if pd.isna(phones.iloc[index]) else phones.iloc[index]
 
             faculty_data = {
-                "faculty_id": faculty_id,
+                "faculty_id": faculty_id, # Explicitly set
                 "name": name_val,
                 "department": dept_val,
                 "designation": cleaned_des,
-                "image_url": img_val, # STRICT KEY
+                "image_url": img_val,
                 "created_at": datetime.now(timezone.utc),
                 "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-                "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-                "research_interests": res_val,
+                "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0}, # FIXED SYNTAX ERROR HERE
+                "research_interests": research_list, # List
                 "office_address": addr_val,
                 "email": email_val,
                 "phone": phone_val,
             }
             
-            # Dynamic Columns (SKIP Image URL to prevent duplication)
-            skipped_cols = ['Name', 'Department', 'Designation', 'Image', 'Image URL', 'Profile Picture', 
-                            'Specialisation', 'Specialization', 'Research Interests', 'Research', 
-                            'Office Address', 'Address', 'Office', 
+            # Dynamic Columns
+            skipped_cols = ['Name', 'Name of Faculty', 'Faculty Name', 
+                            'Department', 'Dept', 'School Name', 'School Name',
+                            'Designation', 'Title', 'Position', 'Role',
+                            'Image', 'Image URL', 'Profile Picture', 'Photo', 'Picture',
+                            'Specialisation', 'Specialization', 'Research Interests', 'Research', 'Area of Specialization',
+                            'Office Address', 'Office_Address', 'Address', 'Office', 'Location',
                             'Email', 'Email Address', 
                             'Phone', 'Mobile', 'Contact', 'Mobile Number',
-                            'Profile_URL', 'Profile URL', 'Profile', 'Link']
+                            'Profile URL', 'Profile_URL', 'Profile', 'Link',
+                            'faculty_id'] # Added faculty_id to skipped_cols
             
             for col in df.columns:
                 should_skip = False
+                col_clean = col.strip().lower()
                 for skip_name in skipped_cols:
-                    if col.strip().lower() == skip_name.lower():
+                    if col_clean == skip_name.lower():
                         should_skip = True
                         break
                 if not should_skip:
@@ -297,7 +314,6 @@ def load_faculty_from_csv():
         return None
 
 def get_demo_faculty():
-    """Returns a static list of demo faculty."""
     departments = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
     base_data = {
         'created_at': datetime.now(timezone.utc),
@@ -381,10 +397,6 @@ def get_demo_faculty():
 
 @app.on_event("startup")
 async def startup_event():
-    """Checks if DB is empty. If so, imports from CSV or loads Demo Data.
-    Also seeds Admin and Demo users if missing."""
-    
-    # 1. SEED FACULTY DATA
     logging.info("Checking database for faculty data...")
     count = await db.faculty.count_documents({})
     
@@ -404,15 +416,36 @@ async def startup_event():
     else:
         logging.info(f"Database already contains {count} faculty records. Skipping import.")
 
-    # 2. SEED USERS (Admin & Demo)
-    logging.info("Checking for seeded users...")
+    logging.info("Checking for seeded users and unified anonymous IDs...")
     
-    # Admin
+    users_cursor = db.users.find({})
+    async for user_doc in users_cursor:
+        update_data = {}
+        
+        # 1. Generate Unified ID if missing
+        if not user_doc.get('anonymous_id'):
+            new_id = str(random.randint(1000, 9999))
+            update_data['anonymous_id'] = new_id
+            update_data['anonymous_chat_id'] = new_id # Sync Chat ID
+            update_data['anonymous_comment_id'] = new_id # Sync Comment ID
+            logging.info(f"Generated unified Anonymous ID {new_id} for user {user_doc.get('email')}")
+        
+        # 2. If Unified ID exists but other fields are mismatched (legacy data), fix them
+        elif user_doc.get('anonymous_chat_id') != user_doc.get('anonymous_id'):
+             update_data['anonymous_chat_id'] = user_doc.get('anonymous_id')
+        
+        elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
+             update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
+            
+        if update_data:
+            await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
+
     admin_email = "admin@vitapstudent.ac.in"
     admin_pass = "Admin123"
     admin_doc = await db.users.find_one({"email": admin_email})
     if not admin_doc:
         logging.info(f"Creating Admin user: {admin_email}")
+        unified_id = str(random.randint(1000, 9999))
         await db.users.insert_one({
             "user_id": f"user_admin_{uuid.uuid4().hex[:12]}",
             "email": admin_email,
@@ -421,15 +454,18 @@ async def startup_event():
             "is_admin": True,
             "preferences": [],
             "ai_interests": [],
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(timezone.utc),
+            "anonymous_id": unified_id,
+            "anonymous_chat_id": unified_id,
+            "anonymous_comment_id": unified_id
         })
     
-    # Demo
     demo_email = "demo@vitapstudent.ac.in"
     demo_pass = "Demo123"
     demo_doc = await db.users.find_one({"email": demo_email})
     if not demo_doc:
         logging.info(f"Creating Demo user: {demo_email}")
+        unified_id = str(random.randint(1000, 9999))
         await db.users.insert_one({
             "user_id": f"user_demo_{uuid.uuid4().hex[:12]}",
             "email": demo_email,
@@ -438,7 +474,10 @@ async def startup_event():
             "is_admin": False,
             "preferences": [],
             "ai_interests": [],
-            "created_at": datetime.now(timezone.utc)
+            "created_at": datetime.now(timezone.utc),
+            "anonymous_id": unified_id,
+            "anonymous_chat_id": unified_id,
+            "anonymous_comment_id": unified_id
         })
 
 # Auth Helper
@@ -472,7 +511,6 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
 # Auth Routes
 @api_router.post("/auth/register")
 async def register_user(user_data: UserRegister):
-    """Allows anyone with @vitapstudent.ac.in to register."""
     if not user_data.email.endswith("@vitapstudent.ac.in"):
         raise HTTPException(status_code=400, detail="Registration restricted to @vitapstudent.ac.in emails")
 
@@ -481,16 +519,21 @@ async def register_user(user_data: UserRegister):
         raise HTTPException(status_code=400, detail="User already exists")
 
     user_id = f"user_{uuid.uuid4().hex[:12]}"
+    unified_id = str(random.randint(1000, 9999))
+    
     new_user = {
         "user_id": user_id,
         "email": user_data.email,
         "name": user_data.name,
         "password_hash": get_password_hash(user_data.password),
         "picture": None,
-        "is_admin": False, # Only pre-seeded admin is admin
+        "is_admin": False, 
         "preferences": [],
         "ai_interests": [],
-        "created_at": datetime.now(timezone.utc)
+        "created_at": datetime.now(timezone.utc),
+        "anonymous_id": unified_id,
+        "anonymous_chat_id": unified_id,
+        "anonymous_comment_id": unified_id
     }
     
     await db.users.insert_one(new_user)
@@ -498,18 +541,15 @@ async def register_user(user_data: UserRegister):
 
 @api_router.post("/auth/login")
 async def login_user(response: Response, login_data: UserLogin):
-    """Login with registered credentials."""
     user_doc = await db.users.find_one({"email": login_data.email}, {"_id": 0})
     
     if not user_doc:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Verify Password
     if not verify_password(login_data.password, user_doc.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     user_id = user_doc["user_id"]
-    # Create Session
     session_token = f"sess_{uuid.uuid4().hex}"
     await db.user_sessions.insert_one({
         "user_id": user_id,
@@ -531,9 +571,7 @@ async def login_user(response: Response, login_data: UserLogin):
     if isinstance(user_doc["created_at"], str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     
-    # Return user without password hash
-    user_response = User(**user_doc)
-    return user_response
+    return User(**user_doc)
 
 @api_router.get("/auth/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)):
@@ -602,7 +640,7 @@ async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(ge
         **faculty.model_dump(),
         "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
         "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-        "openalex_projects": [], # Initialize field
+        "openalex_projects": [],
         "created_at": datetime.now(timezone.utc)
     }
     
@@ -645,8 +683,6 @@ async def delete_faculty(faculty_id: str, current_user: User = Depends(get_curre
 
 @api_router.post("/faculty/{faculty_id}/ratings", response_model=Rating)
 async def submit_rating(faculty_id: str, rating: RatingSubmit, current_user: User = Depends(get_current_user)):
-    # Admins generally shouldn't rate faculty, but allowing it for now.
-    # Could block if current_user.is_admin: raise 403
     
     faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
     
@@ -761,14 +797,24 @@ async def get_comments(faculty_id: str):
     
     return comments
 
-@api_router.post("/faculty/{faculty_id}/comments", response_model=Comment)
+@api_router.post("/faculty/{faculty_id}/comments")
 async def create_comment(faculty_id: str, comment: CommentCreate, current_user: User = Depends(get_current_user)):
+    # GATE: Check if user has rated this faculty
+    rating_doc = await db.ratings.find_one({"faculty_id": faculty_id, "user_id": current_user.user_id})
+    if not rating_doc:
+        raise HTTPException(status_code=403, detail="You must rate this faculty before commenting.")
+
     comment_id = f"comment_{uuid.uuid4().hex[:12]}"
+    
+    # FIX: Use UNIFIED anonymous_id
+    anonymous_handle = f"Anonymous@{current_user.anonymous_id}"
+    
     comment_doc = {
         "comment_id": comment_id,
         "faculty_id": faculty_id,
         "user_id": current_user.user_id,
-        "user_name": current_user.name,
+        "user_name": current_user.name, 
+        "anonymous_handle": anonymous_handle,
         "user_picture": current_user.picture,
         "content": comment.content,
         "parent_comment_id": comment.parent_comment_id,
@@ -777,8 +823,7 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
     
     await db.comments.insert_one(comment_doc)
     
-    comment_doc["created_at"] = datetime.fromisoformat(comment_doc["created_at"].isoformat()) if isinstance(comment_doc["created_at"], str) else comment_doc
-    return Comment(**comment_doc)
+    return {"message": "Comment created successfully", "comment_id": comment_id}
 
 @api_router.delete("/comments/{comment_id}")
 async def delete_comment(comment_id: str, current_user: User = Depends(get_current_user)):
@@ -787,7 +832,6 @@ async def delete_comment(comment_id: str, current_user: User = Depends(get_curre
     if not comment_doc:
         raise HTTPException(status_code=404, detail="Comment not found")
     
-    # Only Admins or the original author can delete
     if comment_doc["user_id"] != current_user.user_id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     
@@ -796,12 +840,29 @@ async def delete_comment(comment_id: str, current_user: User = Depends(get_curre
 
 @api_router.get("/chats", response_model=List[Chat])
 async def get_chats(current_user: User = Depends(get_current_user)):
-    chats = await db.chats.find(
-        {"participants": current_user.user_id},
-        {"_id": 0}
-    ).to_list(100)
+    chats_cursor = db.chats.find({"participants": current_user.user_id}, {"_id": 0})
+    chats_list = await chats_cursor.to_list(100)
     
-    for chat in chats:
+    for chat in chats_list:
+        participant_ids = chat.get("participants", [])
+        resolved_participants = []
+        
+        for pid in participant_ids:
+            if pid == current_user.user_id:
+                resolved_participants.append({
+                    "user_id": pid,
+                    "anonymous_chat_id": "You"
+                })
+            else:
+                other_user = await db.users.find_one({"user_id": pid}, {"_id": 0, "anonymous_chat_id": 1})
+                handle = other_user.get("anonymous_chat_id", "Unknown") if other_user else "Unknown"
+                resolved_participants.append({
+                    "user_id": pid,
+                    "anonymous_chat_id": f"Anonymous@{handle}" # Format return as Anonymous@ID
+                })
+        
+        chat["participants"] = resolved_participants
+
         if isinstance(chat["created_at"], str):
             chat["created_at"] = datetime.fromisoformat(chat["created_at"])
         if isinstance(chat["updated_at"], str):
@@ -809,8 +870,11 @@ async def get_chats(current_user: User = Depends(get_current_user)):
         for msg in chat.get("messages", []):
             if isinstance(msg["created_at"], str):
                 msg["created_at"] = datetime.fromisoformat(msg["created_at"])
+            if "sender_anonymous_id" not in msg:
+                sender = await db.users.find_one({"user_id": msg["sender_id"]}, {"_id": 0, "anonymous_chat_id": 1})
+                msg["sender_anonymous_id"] = f"Anonymous@{sender.get('anonymous_chat_id', 'Unknown')}" if sender else "Unknown"
     
-    return chats
+    return chats_list
 
 @api_router.post("/chats/messages")
 async def send_message(message: ChatMessageCreate, current_user: User = Depends(get_current_user)):
@@ -824,6 +888,8 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
     new_message = {
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "sender_id": current_user.user_id,
+        # FIX: Use UNIFIED anonymous_id
+        "sender_anonymous_id": f"Anonymous@{current_user.anonymous_id}",
         "content": message.content,
         "created_at": datetime.now(timezone.utc)
     }
@@ -841,17 +907,20 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         chat_id = f"chat_{uuid.uuid4().hex[:12]}"
         await db.chats.insert_one({
             "chat_id": chat_id,
-            "participants": participants,
+            "participants": participants, 
             "messages": [new_message],
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc)
         })
     
+    # WEBSOCKET EMIT
+    room = f"chat_{chat_id}"
+    await sio.emit(room, new_message)
+    
     return {"chat_id": chat_id, "message": new_message}
 
 @api_router.get("/recommendations")
 async def get_recommendations(current_user: User = Depends(get_current_user)):
-    # Admin Logic: Admins do not need recommendations
     if current_user.is_admin:
         return []
 
@@ -880,13 +949,15 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                     rating_count += 1
         
         # Normalize to 0-100. Max rating is 5.
-        # If user has rating preferences, score is determined by rating.
+        # FIX: If user has rating preferences, score is determined by ratings (Part 1).
+        # Fallback to 'overall' if specific category is 0
+        normalized_rating_score = 0
         if rating_count > 0:
-            final_score = (rating_compatibility / rating_count) * 20 
+            normalized_rating_score = (rating_compatibility / rating_count) * 20 
         else:
-            # If no rating preferences but research interests exist, we give a default high score
-            # but we handle this in Part 2 logic mostly.
-            final_score = 0 
+             # No ratings in selected categories, check for fallback to Overall
+             if 'overall' in fac['avg_ratings'] and fac['avg_ratings']['overall'] > 0:
+                 normalized_rating_score = fac['avg_ratings']['overall'] * 20
 
         # --- PART 2: RESEARCH INTERESTS (INTELLIGENT KEYWORD MATCHING) ---
         # This determines IF faculty appears in list, not their score
@@ -898,8 +969,12 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
             search_text = ""
             
             # Handle None values safely
-            res_interests = fac.get('research_interests') or ''
-            search_text += res_interests + " "
+            res_interests = fac.get('research_interests') or []
+            # Handle List correctly
+            if isinstance(res_interests, list):
+                search_text += " ".join(res_interests) + " "
+            else:
+                search_text += str(res_interests) + " "
             
             projects = fac.get('openalex_projects') or []
             for p in projects:
@@ -920,60 +995,60 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                         if interest_lower in p.get('title', '').lower():
                             reason = f"Matched '{interest}' in project: '{p.get('title', '')[:30]}...'"
                             break
+                    if not match_found:
+                        reason = f"Matched '{interest}' in research interests."
                     break
-                
-                # 2. Synonym Matching (Basic)
-                # e.g., User says "AI", faculty has "Artificial Intelligence"
-                synonyms = {
-                    "ai": "artificial intelligence",
-                    "nlp": "natural language processing",
-                    "ml": "machine learning",
-                    "iot": "internet of things"
-                }
-                
-                if interest_lower in synonyms:
-                    synonym = synonyms[interest_lower]
-                    if synonym in search_text:
-                        match_found = True
-                        reason = f"Matched '{interest}' (synonym for '{synonym}') found."
-                        break
 
         # --- COMBINATION LOGIC ---
         # Priority:
         # 1. If User selected Preferences -> Score is based on Ratings (Part 1).
         # 2. If User selected Research Interests AND Matched -> Give default score if no ratings.
         
-        if rating_count > 0:
-            # User has ratings preferences. Score is determined by ratings (Part 1).
-            # We still keep the faculty if they matched research interests (adds to 'reason' maybe? No, user wants simple reason).
-            if match_found or rating_compatibility > 0:
-                # If research matched, update reason or append? 
-                # User requested: "tell something like word AI matched in this project"
-                if match_found:
-                    # If both matched, prioritize score (already calculated) but use Research Reason?
-                    # User said: "give the priority to rating one".
-                    # Let's keep the rating score, but maybe append the research match to reason?
-                    # Simplest approach: Use Research Reason as it's more descriptive.
-                    pass 
-                
-                recommendations.append({
-                    **fac,
-                    "compatibility_percentage": round(final_score, 1),
-                    "recommendation_reason": reason if match_found else "Highly rated in preferences."
-                })
-        else:
-            # User has NO rating preferences, only Research Interests.
+        final_score = 0
+        show_reason = False
+        
+        # SCENARIO 1: ONLY AI INTERESTS
+        # Requirement: Don't show compatibility percentage
+        if not user_rating_prefs and user_ai_interests:
             if match_found:
                 # Give a default score for relevance (e.g., 85)
+                final_score = 85 # Used for sorting only
+                show_reason = True
+        
+        # SCENARIO 2: ONLY RATING PREFERENCES (Ratings)
+        # Requirement: Show score.
+        elif user_rating_prefs and not user_ai_interests:
+            if rating_count > 0:
+                final_score = normalized_rating_score
+                show_reason = True
+        
+        # SCENARIO 3: BOTH INTERESTS AND RATINGS
+        # Requirement: Priority to Ratings. Show score.
+        elif user_rating_prefs and user_ai_interests:
+            if rating_count > 0:
+                # If ratings exist, use rating score, ignore AI score
+                final_score = normalized_rating_score
+                show_reason = True
+            elif match_found:
+                # Fallback: If no ratings, use AI score
                 final_score = 85
-                recommendations.append({
-                    **fac,
-                    "compatibility_percentage": round(final_score, 1),
-                    "recommendation_reason": reason
-                })
+                show_reason = True
+
+        if show_reason:
+            rec_data = {
+                **fac,
+                "recommendation_reason": reason
+            }
+            
+            # Requirement: Show compatibility percentage ONLY if Rating Prefs are involved
+            if user_rating_prefs:
+                rec_data["compatibility_percentage"] = round(final_score, 1)
+            
+            recommendations.append(rec_data)
 
     # Sort by compatibility percentage descending
-    recommendations.sort(key=lambda x: x["compatibility_percentage"], reverse=True)
+    # If AI only, compatibility_percentage won't exist, so sort by 0 (fallback) or rely on order
+    recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)
     
     return recommendations[:10]
 
@@ -1241,7 +1316,7 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(','),
+    allow_origins=cors_origins, 
     allow_methods=["*"],
     allow_headers=["*"],
 )

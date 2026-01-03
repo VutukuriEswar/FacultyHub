@@ -10,3 +10,5 @@ openpyxl
 requests
 passlib[bcrypt]
 bcrypt==3.2.2
+python-socketio
+uvicorn[standard]
