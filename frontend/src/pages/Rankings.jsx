@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'; // Added useCallback
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { ArrowLeft, TrendingUp, Star, Search } from 'lucide-react';
@@ -61,11 +61,11 @@ export default function Rankings({ user }) {
     } finally {
       setLoading(false);
     }
-  }, [department, category, method]); // Dependencies
+  }, [department, category, method]);
 
   useEffect(() => {
     loadRankings();
-  }, [loadRankings]); // Dependency: loadRankings
+  }, [loadRankings]);
 
   const filteredRankings = rankings.filter(faculty => {
     const query = searchQuery.toLowerCase();
@@ -88,7 +88,6 @@ export default function Rankings({ user }) {
           <h1 className="text-4xl font-bold gradient-text" data-testid="rankings-header">Faculty Rankings</h1>
         </div>
 
-        {/* Filters */}
         <Card className="mb-8" data-testid="filters-section">
           <CardContent className="p-6">
             <div className="grid md:grid-cols-3 gap-4">
@@ -157,7 +156,6 @@ export default function Rankings({ user }) {
           </CardContent>
         </Card>
 
-        {/* Rankings List */}
         {loading ? (
           <div className="flex justify-center py-20">
             <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent"></div>
@@ -180,7 +178,6 @@ export default function Rankings({ user }) {
               >
                 <CardContent className="p-6">
                   <div className="flex items-center gap-6">
-                    {/* Rank */}
                     <div className="text-center">
                       <div
                         className={`text-3xl font-bold ${index === 0
@@ -196,20 +193,17 @@ export default function Rankings({ user }) {
                       </div>
                     </div>
 
-                    {/* Avatar */}
                     <Avatar className="w-16 h-16">
                       <AvatarImage src={faculty.image_url} />
                       <AvatarFallback>{faculty.name.charAt(0)}</AvatarFallback>
                     </Avatar>
 
-                    {/* Info */}
                     <div className="flex-1">
                       <h3 className="text-xl font-semibold mb-1">{faculty.name}</h3>
                       <p className="text-sm text-muted-foreground mb-2">{faculty.designation}</p>
                       <Badge variant="secondary">{faculty.department}</Badge>
                     </div>
 
-                    {/* Score */}
                     <div className="text-right">
                       <div className="flex items-center gap-2 mb-1">
                         <Star className="w-5 h-5 fill-yellow-400 text-yellow-400" />

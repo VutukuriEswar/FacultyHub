@@ -11,8 +11,6 @@ import { toast } from 'sonner';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
-
-// Initialize socket globally
 const socket = io(BACKEND_URL, {
   transports: ['websocket', 'polling'],
   withCredentials: true
@@ -30,7 +28,6 @@ export default function Chats({ user }) {
     try {
       setLoading(true);
       const response = await axios.get(`${API}/chats`);
-      // Guard against null response
       if (Array.isArray(response.data)) {
         setChats(response.data);
       } else {
@@ -45,12 +42,10 @@ export default function Chats({ user }) {
     }
   }, []);
 
-  // EFFECT 1: INITIAL LOAD
   useEffect(() => {
     loadChats();
   }, [loadChats]);
 
-  // EFFECT 2: HANDLE RECIPIENT SELECTION FROM URL STATE
   useEffect(() => {
     if (location.state?.recipientId && chats.length > 0) {
       const existingChat = chats.find(c =>
@@ -58,13 +53,11 @@ export default function Chats({ user }) {
       );
       if (existingChat) {
         setSelectedChat(existingChat);
-        // Clear the location state to prevent re-triggering
         window.history.replaceState({}, document.title);
       }
     }
   }, [chats, location.state?.recipientId]);
 
-  // EFFECT 3: SOCKET LISTENERS (Runs ONCE)
   useEffect(() => {
     socket.on('connect', () => {
       console.log('Connected to WebSocket');
@@ -73,16 +66,13 @@ export default function Chats({ user }) {
     socket.on('message', (message) => {
       console.log('New message received:', message);
 
-      // 1. Update the specific chat in the sidebar list
       setChats(prevChats => {
         const chatIndex = prevChats.findIndex(c => c.chat_id === message.chat_id);
         if (chatIndex !== -1) {
           const updatedChats = [...prevChats];
-          // Safety check: ensure chat object exists
           if (updatedChats[chatIndex]) {
             updatedChats[chatIndex] = {
               ...updatedChats[chatIndex],
-              // Safely access existing messages
               messages: [...(updatedChats[chatIndex].messages || []), message]
             };
           }
@@ -91,9 +81,7 @@ export default function Chats({ user }) {
         return prevChats;
       });
 
-      // 2. Update the currently open chat view
       setSelectedChat(prev => {
-        // Only update if this is the active chat
         if (prev && prev.chat_id === message.chat_id) {
           return {
             ...prev,
@@ -108,12 +96,11 @@ export default function Chats({ user }) {
       socket.off('connect');
       socket.off('message');
     };
-  }, []); // Empty deps: Run once on mount
+  }, []);
 
   const handleSendMessage = async () => {
     if (!newMessage.trim()) return;
 
-    // Determine recipient
     let recipientId = location.state?.recipientId;
 
     if (!recipientId && selectedChat) {
@@ -134,13 +121,11 @@ export default function Chats({ user }) {
       created_at: new Date()
     };
 
-    // Optimistic UI Update
     setSelectedChat(prev => {
-      // If no chat selected (e.g. new chat), create a dummy shell for UI
       if (!prev) {
         return {
           chat_id: 'temp_new',
-          participants: [], // Empty for now until API confirms
+          participants: [],
           messages: [tempMsg]
         };
       }
@@ -158,23 +143,20 @@ export default function Chats({ user }) {
         recipient_id: recipientId,
         content: contentToSend
       });
-      // Socket event will update state with the real message (with correct chat_id)
-      // If it was a new chat, we might need to refresh the list or wait for socket
       if (!selectedChat) {
         loadChats();
       }
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message');
-      // Revert optimistic update
       setSelectedChat(prev => {
-        if (!prev) return null; // Shouldn't happen if we just set it
+        if (!prev) return null;
         return {
           ...prev,
           messages: prev.messages.filter(m => m.message_id !== tempMsg.message_id)
         };
       });
-      setNewMessage(contentToSend); // Restore text
+      setNewMessage(contentToSend);
     }
   };
 
@@ -202,7 +184,6 @@ export default function Chats({ user }) {
           </div>
         ) : (
           <div className="grid md:grid-cols-3 gap-6 h-[600px]">
-            {/* --- CHAT LIST SIDEBAR --- */}
             <Card className="md:col-span-1" data-testid="chat-list">
               <CardHeader>
                 <CardTitle>Conversations</CardTitle>
@@ -215,7 +196,6 @@ export default function Chats({ user }) {
                 ) : (
                   chats.map(chat => {
                     const otherParticipant = getOtherParticipant(chat);
-                    // Safety check for messages array
                     const messagesList = chat.messages || [];
                     const lastMessage = messagesList.length > 0
                       ? messagesList[messagesList.length - 1]
@@ -253,7 +233,6 @@ export default function Chats({ user }) {
               </CardContent>
             </Card>
 
-            {/* --- ACTIVE CHAT WINDOW --- */}
             <Card className="md:col-span-2" data-testid="chat-window">
               {selectedChat || location.state?.recipientId ? (
                 <>

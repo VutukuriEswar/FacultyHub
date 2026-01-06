@@ -5,9 +5,6 @@ export default function AuthCallback() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Since the new server uses direct Login/Register with passwords,
-    // this OAuth callback page is no longer needed.
-    // Redirect to home to prevent errors.
     navigate('/', { replace: true });
   }, [navigate]);
 

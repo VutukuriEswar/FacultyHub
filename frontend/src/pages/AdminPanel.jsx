@@ -15,7 +15,6 @@ import { toast } from 'sonner';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Ensure cookies are sent
 axios.defaults.withCredentials = true;
 
 const DEPARTMENTS = [
@@ -67,7 +66,6 @@ export default function AdminPanel({ user }) {
     }
   };
 
-  // NEW FUNCTION: Sync OpenAlex
   const handleSyncOpenAlex = async () => {
     const confirm = window.confirm("This will update all faculty profiles with OpenAlex project data. It may take a moment. Continue?");
     if (!confirm) return;
@@ -76,7 +74,7 @@ export default function AdminPanel({ user }) {
     try {
       const response = await axios.post(`${API}/admin/sync-openalex`);
       toast.success(`Sync Completed! Updated: ${response.data.updated_count}, Failed: ${response.data.failed_count}`);
-      loadFaculty(); // Reload to see changes
+      loadFaculty();
     } catch (error) {
       console.error('Sync error:', error);
       toast.error('Failed to sync OpenAlex data. Check console.');
@@ -173,7 +171,7 @@ export default function AdminPanel({ user }) {
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-4xl font-bold gradient-text" data-testid="admin-header">Admin Panel</h1>
           <div className="flex gap-2">
-            {/* NEW SYNC BUTTON */}
+
             <Button
               onClick={handleSyncOpenAlex}
               disabled={isSyncing}

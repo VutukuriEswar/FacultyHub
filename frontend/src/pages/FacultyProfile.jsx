@@ -20,7 +20,6 @@ const RATING_CATEGORIES = [
 ];
 
 export default function FacultyProfile({ user }) {
-  // FIX: Changed back to 'facultyId' to match App.js route <Route path="/faculty/:facultyId" ... />
   const { facultyId } = useParams();
   const navigate = useNavigate();
 
@@ -33,11 +32,9 @@ export default function FacultyProfile({ user }) {
   const [tempRatings, setTempRatings] = useState({});
   const [showAllPublications, setShowAllPublications] = useState(false);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      // FIX: Updated API calls to use ${facultyId}
       const [facultyRes, ratingRes, commentsRes] = await Promise.all([
         axios.get(`${API}/faculty/${facultyId}`),
         axios.get(`${API}/faculty/${facultyId}/ratings/me`, { withCredentials: true }),
@@ -131,8 +128,6 @@ export default function FacultyProfile({ user }) {
   const topLevelComments = comments.filter(c => !c.parent_comment_id);
   const getReplies = (commentId) => comments.filter(c => c.parent_comment_id === commentId);
 
-  // --- STRICT FIELD DEFINITIONS ---
-
   const SYSTEM_FIELDS = [
     'faculty_id', 'name', 'department', 'designation',
     'scholar_profile', 'publications', 'research_interests', 'office_address',
@@ -207,7 +202,7 @@ export default function FacultyProfile({ user }) {
         <Card className="mb-8" data-testid="faculty-profile-card">
           <CardContent className="p-8">
             <div className="flex flex-col md:flex-row gap-8">
-              <Avatar className="w-32 h-32 h-auto border-2 border-border">
+              <Avatar className="w-32 h-32 border-2 border-border">
                 <AvatarImage
                   src={faculty.image_url}
                   alt={faculty.name}
@@ -277,7 +272,6 @@ export default function FacultyProfile({ user }) {
               </div>
             </div>
 
-            {/* OpenAlex Projects */}
             {faculty.openalex_projects && faculty.openalex_projects.length > 0 ? (
               <div className="mt-8 pt-6 border-t border-border">
                 <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
@@ -307,15 +301,6 @@ export default function FacultyProfile({ user }) {
                             {project.title || "Untitled Project"}
                           </h4>
                         </div>
-                        <a
-                          href={`https://openalex.org/work/${project.openalex_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors whitespace-nowrap bg-primary/5 px-4 py-2 rounded-md hover:bg-primary/10"
-                        >
-                          <BookOpen className="w-4 h-4" />
-                          View on OpenAlex
-                        </a>
                       </div>
                     </div>
                   ))}
@@ -340,12 +325,11 @@ export default function FacultyProfile({ user }) {
             ) : (
               <div className="mt-8 pt-6 border-t border-border">
                 <p className="text-sm text-muted-foreground italic">
-                  No OpenAlex projects synced for this faculty member yet.
+                  No OpenAlex projects synced for this faculty member in the VIT-AP Intitution yet.
                 </p>
               </div>
             )}
 
-            {/* DYNAMIC ADDITIONAL DETAILS */}
             {renderDetailsList(faculty).length > 0 && (
               <div className="mt-8 pt-6 border-t border-border">
                 <h3 className="text-xl font-semibold mb-4">Additional Details</h3>
@@ -357,7 +341,6 @@ export default function FacultyProfile({ user }) {
           </CardContent>
         </Card>
 
-        {/* Rating Section */}
         <Card className="mb-8" data-testid="rating-section">
           <CardHeader>
             <CardTitle>Rate This Professor</CardTitle>
@@ -386,7 +369,6 @@ export default function FacultyProfile({ user }) {
           </CardContent>
         </Card>
 
-        {/* Comments Section */}
         <Card data-testid="comments-section">
           <CardHeader>
             <CardTitle>Student Reviews</CardTitle>

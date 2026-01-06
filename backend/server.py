@@ -55,7 +55,6 @@ api_router = APIRouter(prefix="/api")
 VIT_INSTITUTION_LINEAGE = "i4401726783"
 
 # --- MODELS ---
-
 class User(BaseModel):
     model_config = ConfigDict(extra="allow")
     user_id: str
@@ -176,16 +175,9 @@ class ChatMessageCreate(BaseModel):
     content: str
 
 def load_faculty_from_csv():
-    """
-    Loads faculty from CSV using ROBUST logic.
-    Ensures research_interests is a List.
-    Prevents CSV from overwriting generated faculty_id.
-    """
     file_path = ROOT_DIR / 'faculty_data.csv'
-    
     if not file_path.exists():
         return None
-
     try:
         df = pd.read_csv(file_path)
         
@@ -220,7 +212,6 @@ def load_faculty_from_csv():
         KNOWN_DEPTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
 
         for index, row in df.iterrows():
-            # --- GENERATE ID FIRST ---
             faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"
             
             # Name
@@ -238,7 +229,6 @@ def load_faculty_from_csv():
                     if d in raw_des:
                         dept_val = d 
                         break
-            
             if not pd.isna(raw_des) and isinstance(raw_des, str):
                 parts = raw_des.split(',')
                 parts = [p.strip() for p in parts if p.strip() != str(dept_val) and p.strip() != '']
@@ -267,14 +257,14 @@ def load_faculty_from_csv():
             phone_val = None if pd.isna(phones.iloc[index]) else phones.iloc[index]
 
             faculty_data = {
-                "faculty_id": faculty_id, # Explicitly set
+                "faculty_id": faculty_id,
                 "name": name_val,
                 "department": dept_val,
                 "designation": cleaned_des,
                 "image_url": img_val,
                 "created_at": datetime.now(timezone.utc),
                 "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-                "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0}, # FIXED SYNTAX ERROR HERE
+                "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
                 "research_interests": research_list, # List
                 "office_address": addr_val,
                 "email": email_val,
@@ -291,7 +281,7 @@ def load_faculty_from_csv():
                             'Email', 'Email Address', 
                             'Phone', 'Mobile', 'Contact', 'Mobile Number',
                             'Profile URL', 'Profile_URL', 'Profile', 'Link',
-                            'faculty_id'] # Added faculty_id to skipped_cols
+                            'faculty_id']
             
             for col in df.columns:
                 should_skip = False
@@ -433,7 +423,7 @@ async def startup_event():
         # 2. If Unified ID exists but other fields are mismatched (legacy data), fix them
         elif user_doc.get('anonymous_chat_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_chat_id'] = user_doc.get('anonymous_id')
-        
+
         elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
             
@@ -601,7 +591,6 @@ async def update_profile(update: UserUpdate, current_user: User = Depends(get_cu
     
     return User(**user_doc)
 
-# Faculty Routes
 @api_router.get("/faculty", response_model=List[Faculty])
 async def get_all_faculty(department: Optional[str] = None):
     query = {}
@@ -913,7 +902,6 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
             "updated_at": datetime.now(timezone.utc)
         })
     
-    # WEBSOCKET EMIT
     room = f"chat_{chat_id}"
     await sio.emit(room, new_message)
     
@@ -935,8 +923,6 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
     recommendations = []
     
     for fac in faculty_list:
-        # --- PART 1: PREFERENCES (RATINGS) ---
-        # Calculate Compatibility Score ONLY based on preferences (ratings)
         rating_compatibility = 0.0
         rating_count = 0
         
@@ -947,10 +933,7 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                 if rating > 0:
                     rating_compatibility += rating
                     rating_count += 1
-        
-        # Normalize to 0-100. Max rating is 5.
-        # FIX: If user has rating preferences, score is determined by ratings (Part 1).
-        # Fallback to 'overall' if specific category is 0
+
         normalized_rating_score = 0
         if rating_count > 0:
             normalized_rating_score = (rating_compatibility / rating_count) * 20 
@@ -959,18 +942,12 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
              if 'overall' in fac['avg_ratings'] and fac['avg_ratings']['overall'] > 0:
                  normalized_rating_score = fac['avg_ratings']['overall'] * 20
 
-        # --- PART 2: RESEARCH INTERESTS (INTELLIGENT KEYWORD MATCHING) ---
-        # This determines IF faculty appears in list, not their score
         match_found = False
         reason = ""
         
         if user_ai_interests:
-            # Combine search text: Research Interests + All Project Titles
             search_text = ""
-            
-            # Handle None values safely
             res_interests = fac.get('research_interests') or []
-            # Handle List correctly
             if isinstance(res_interests, list):
                 search_text += " ".join(res_interests) + " "
             else:
@@ -986,11 +963,10 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
             for interest in user_ai_interests:
                 interest_lower = interest.lower()
                 
-                # 1. Direct Match
                 if interest_lower in search_text:
                     match_found = True
                     reason = f"Matched '{interest}' in Research/Projects."
-                    # Check if it was in a specific project for better feedback
+                    
                     for p in projects:
                         if interest_lower in p.get('title', '').lower():
                             reason = f"Matched '{interest}' in project: '{p.get('title', '')[:30]}...'"
@@ -999,16 +975,10 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                         reason = f"Matched '{interest}' in research interests."
                     break
 
-        # --- COMBINATION LOGIC ---
-        # Priority:
-        # 1. If User selected Preferences -> Score is based on Ratings (Part 1).
-        # 2. If User selected Research Interests AND Matched -> Give default score if no ratings.
-        
         final_score = 0
         show_reason = False
         
         # SCENARIO 1: ONLY AI INTERESTS
-        # Requirement: Don't show compatibility percentage
         if not user_rating_prefs and user_ai_interests:
             if match_found:
                 # Give a default score for relevance (e.g., 85)
@@ -1016,21 +986,17 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                 show_reason = True
         
         # SCENARIO 2: ONLY RATING PREFERENCES (Ratings)
-        # Requirement: Show score.
         elif user_rating_prefs and not user_ai_interests:
             if rating_count > 0:
                 final_score = normalized_rating_score
                 show_reason = True
         
         # SCENARIO 3: BOTH INTERESTS AND RATINGS
-        # Requirement: Priority to Ratings. Show score.
         elif user_rating_prefs and user_ai_interests:
             if rating_count > 0:
-                # If ratings exist, use rating score, ignore AI score
                 final_score = normalized_rating_score
                 show_reason = True
             elif match_found:
-                # Fallback: If no ratings, use AI score
                 final_score = 85
                 show_reason = True
 
@@ -1039,30 +1005,16 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                 **fac,
                 "recommendation_reason": reason
             }
-            
-            # Requirement: Show compatibility percentage ONLY if Rating Prefs are involved
             if user_rating_prefs:
                 rec_data["compatibility_percentage"] = round(final_score, 1)
             
             recommendations.append(rec_data)
 
-    # Sort by compatibility percentage descending
-    # If AI only, compatibility_percentage won't exist, so sort by 0 (fallback) or rely on order
-    recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)
-    
+    recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)    
     return recommendations[:10]
-
 
 @api_router.post("/admin/sync-openalex")
 async def sync_openalex_data(current_user: User = Depends(get_current_user)):
-    """
-    Admin-only route to fetch OpenAlex projects for VIT-AP University faculty.
-    Strategy:
-    1. Clean faculty name (remove titles).
-    2. Search VIT-AP University authors.
-    3. Match Faculty Name to OpenAlex Author Name (Handling reordering & initials).
-    4. Fetch works (Filtered by VIT-AP).
-    """
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
 
@@ -1087,7 +1039,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
 
     for faculty in all_faculty_data:
         
-        # --- STEP 1: Clean Faculty Name ---
+        # Step 1: Clean Faculty Name
         raw_name = faculty["name"]
         prefixes_to_remove = [
             "dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", 
@@ -1103,7 +1055,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
             skipped_count += 1
             continue
             
-        # Create a set of tokens for the faculty
         faculty_tokens = set(clean_name_string(clean_faculty_name).split())
         
         if not faculty_tokens:
@@ -1118,7 +1069,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
         target_author_id = None
 
         try:
-            # --- STEP 2: Search for Author Affiliated with VIT-AP University ---
+            # Step 2: Search for Author Affiliated with VIT-AP University
             url_author_search = "https://api.openalex.org/authors"
             params_author = {
                 "filter": f"last_known_institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
@@ -1141,8 +1092,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 for author in vit_authors:
                     author_display = author.get("display_name", "")
                     author_id = author.get("id", "")
-                    
-                    # --- NEW SMART MATCHING LOGIC ---
                     author_tokens = set(clean_name_string(author_display).split())
 
                     # 1. Exact Set Match (Handles "Anil Vitthalrao Turukmane" <-> "Turukmane Anil Vitthalrao")
@@ -1163,23 +1112,18 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                             break
 
                     # 3. Initial Matching (Handles "Anil Vitthalrao Turukmane" <-> "A V Turukmane")
-                    # We verify that all full tokens in author exist in faculty
                     full_author_tokens = [t for t in author_tokens if len(t) >1]
                     if any(t not in faculty_tokens for t in full_author_tokens):
-                        continue # Author has a full name (e.g. "Amit") that Faculty doesn't have (e.g. "Anil")
+                        continue
                     
-                    # We verify that initials in author match first letters of faculty names
                     initial_author_tokens = [t for t in author_tokens if len(t) == 1]
                     match_possible = True
                     for initial in initial_author_tokens:
-                        # Check if faculty has a name starting with this initial
                         if not any(f_token.startswith(initial) for f_token in faculty_tokens):
                             match_possible = False
                             break
                     
                     if match_possible:
-                        # Additional check: ensure the core name (longest token) matches
-                        # e.g., "Turukmane" is definitely present
                         longest_author = max(author_tokens, key=len)
                         if longest_author in faculty_tokens:
                             target_author_id = author_id
@@ -1204,13 +1148,12 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 skipped_count += 1
                 continue
 
-            # --- STEP 3: Fetch Works for the Matched Author ---
+            # Step 3: Fetch Works for the Matched Author
             url_works_final = "https://api.openalex.org/works"
 
-            # --- LOGIC 2: Fetch ONLY VIT-AP works (Active) ---
             params_final = {
-                # Filter by Author ID AND VIT-AP Institution Lineage
-                "filter": f"authorships.author.id:{target_author_id},authorships.institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
+                #"filter": f"authorships.author.id:{target_author_id}",  #All Works
+                "filter": f"authorships.author.id:{target_author_id},authorships.institutions.lineage:{VIT_INSTITUTION_LINEAGE}",   #VIT-AP Works
                 "per_page": 200,
                 "sort": "publication_year:desc",
                 "mailto": "admin@vitapstudent.ac.in"
@@ -1218,7 +1161,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
 
             logging.info(f"Fetching VIT-AP publications for {raw_name} (ID: {target_author_id})...")
             
-            response_works = requests.get(url_works_final, params=params_final, headers=headers, timeout=15.0)
+            response_works = requests.get(url_works_final, params=params_final, headers=headers)
 
             if response_works.status_code != 200:
                 logging.error(f"Error fetching works for {target_author_id}: {response_works.text[:100]}")
@@ -1226,8 +1169,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 continue
 
             data_works = response_works.json()
-            
-            # --- PROCESS WORKS ---
             clean_projects = []
             
             if "results" in data_works and data_works["results"]:
@@ -1273,7 +1214,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
 
 @api_router.get("/rankings")
 async def get_rankings(department: Optional[str] = None, category: str = "overall", method: str = "weighted", current_user: User = Depends(get_current_user)):
-    # Admin Logic: Admins do not need rankings
     if current_user.is_admin:
         return []
 

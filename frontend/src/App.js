@@ -3,8 +3,6 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import '@/App.css';
 import { Toaster } from '@/components/ui/sonner';
-
-// The AuthCallback import has been REMOVED
 import LandingPage from '@/pages/LandingPage';
 import Dashboard from '@/pages/Dashboard';
 import FacultyProfile from '@/pages/FacultyProfile';
@@ -24,14 +22,13 @@ const ProtectedRoute = ({ children }) => {
   const location = useLocation();
 
   useEffect(() => {
-    // Check if user data is passed from the login page
+
     if (location.state?.user) {
       setUser(location.state.user);
       setIsAuthenticated(true);
       return;
     }
 
-    // Otherwise, verify session cookie
     const checkAuth = async () => {
       try {
         const response = await axios.get(`${API}/auth/me`);
@@ -61,9 +58,6 @@ const ProtectedRoute = ({ children }) => {
 };
 
 function AppRouter() {
-  // The logic for handling the Emergent OAuth callback has been REMOVED.
-  // The app now directly renders the routes.
-
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />

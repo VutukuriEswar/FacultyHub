@@ -11,7 +11,6 @@ import { toast } from 'sonner';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Configure axios to send cookies for every request from this component
 axios.defaults.withCredentials = true;
 
 export default function LandingPage() {
@@ -57,7 +56,6 @@ export default function LandingPage() {
 
     setIsLoading(true);
     try {
-      // Call the new dedicated register endpoint
       await axios.post(`${API}/auth/register`, { name, email, password });
       toast.success('Registration successful! Please sign in.');
       setName('');
@@ -159,7 +157,6 @@ export default function LandingPage() {
             )}
           </div>
 
-          {/* --- DEMO CREDENTIALS SECTION --- */}
           {isLogin && (
             <div className="mt-6 p-4 bg-muted/50 rounded-lg border border-dashed border-border">
               <h4 className="font-semibold text-sm mb-3 flex items-center gap-2">

@@ -34,7 +34,6 @@ const AI_OPTIONS = [
   { value: 'Blockchain', label: 'Blockchain' }
 ];
 
-// --- COMPONENT: ADMIN VIEW (All Faculty List) ---
 function AdminView({ user }) {
   const navigate = useNavigate();
   const [allFaculty, setAllFaculty] = useState([]);
@@ -75,7 +74,6 @@ function AdminView({ user }) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
-      {/* Header */}
       <header className="border-b border-border bg-white/80 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -84,7 +82,6 @@ function AdminView({ user }) {
                 VIT-AP Faculty Hub
               </h1>
 
-              {/* ADMIN NAVIGATION: Only Admin Panel */}
               <nav className="hidden md:flex items-center gap-4">
                 <Button
                   variant="ghost"
@@ -111,8 +108,6 @@ function AdminView({ user }) {
       </header>
 
       <div className="container mx-auto px-6 py-8">
-
-        {/* Header Section */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
             <LayoutDashboard className="w-8 h-8 text-primary" />
@@ -125,7 +120,6 @@ function AdminView({ user }) {
           </div>
         </div>
 
-        {/* Search Bar */}
         <div className="mb-8">
           <div className="relative max-w-2xl mx-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
@@ -140,7 +134,6 @@ function AdminView({ user }) {
           </div>
         </div>
 
-        {/* Faculty List */}
         <div>
           <h2 className="text-2xl font-bold mb-4">
             {searchQuery ? `Search Results (${filteredFaculty.length})` : `All Faculty (${allFaculty.length})`}
@@ -204,7 +197,6 @@ function AdminView({ user }) {
   );
 }
 
-// --- COMPONENT: STUDENT VIEW (Recommendations, Interests, etc.) ---
 function StudentDashboard({ user }) {
   const navigate = useNavigate();
   const [preferences, setPreferences] = useState(user?.preferences || []);
@@ -219,8 +211,6 @@ function StudentDashboard({ user }) {
       setLoading(true);
       const facultyRes = await axios.get(`${API}/faculty`);
       setAllFaculty(facultyRes.data);
-
-      // Only fetch recommendations if we have filters active
       if (preferences.length > 0 || aiInterests.length > 0) {
         const recsRes = await axios.get(`${API}/recommendations`);
         setRecommendations(recsRes.data);
@@ -233,7 +223,7 @@ function StudentDashboard({ user }) {
     } finally {
       setLoading(false);
     }
-  }, [preferences, aiInterests]); // Re-run when these change
+  }, [preferences, aiInterests]);
 
   useEffect(() => {
     loadData();
@@ -246,7 +236,6 @@ function StudentDashboard({ user }) {
         ai_interests: aiInterests
       });
       toast.success('Preferences updated successfully');
-      // Reload data immediately to show new recommendations
       await loadData();
     } catch (error) {
       console.error('Error updating preferences:', error);
@@ -285,7 +274,6 @@ function StudentDashboard({ user }) {
     f.department.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // State flags for UI switching
   const showSearch = searchQuery.length > 0;
   const showAiRecommendations = aiInterests.length > 0 && preferences.length === 0;
   const showRatingRecommendations = preferences.length > 0 && aiInterests.length === 0;
@@ -297,13 +285,10 @@ function StudentDashboard({ user }) {
     : (showAiRecommendations || showRatingRecommendations || showMixedRecommendations)
       ? recommendations
       : allFaculty;
-
-  // Determine if we should show the score (Show only for Rating Prefs)
   const showCompatibilityScore = showRatingRecommendations || showMixedRecommendations;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
-      {/* Header */}
       <header className="border-b border-border bg-white/80 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -312,7 +297,6 @@ function StudentDashboard({ user }) {
                 VIT-AP Faculty Hub
               </h1>
 
-              {/* STUDENT NAVIGATION: Only Home & Rankings */}
               <nav className="hidden md:flex items-center gap-4">
                 <Button variant="ghost" onClick={() => navigate('/dashboard')} data-testid="nav-home-button">
                   Home
@@ -340,8 +324,6 @@ function StudentDashboard({ user }) {
       </header>
 
       <div className="container mx-auto px-6 py-8">
-
-        {/* AI / SEARCH INTERESTS */}
         <Card className="mb-8 border-l-4 border-primary bg-primary/5" data-testid="ai-interests-section">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -374,7 +356,6 @@ function StudentDashboard({ user }) {
           </CardContent>
         </Card>
 
-        {/* TEACHING PREFERENCES */}
         <Card className="mb-8 hover-lift" data-testid="preferences-section">
           <CardHeader>
             <CardTitle>What matters most to you?</CardTitle>
@@ -399,7 +380,6 @@ function StudentDashboard({ user }) {
           </CardContent>
         </Card>
 
-        {/* Search Bar */}
         <div className="mb-8">
           <div className="relative max-w-2xl mx-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
@@ -414,7 +394,6 @@ function StudentDashboard({ user }) {
           </div>
         </div>
 
-        {/* Faculty List */}
         <div>
           {showSearch && (
             <h2 className="text-2xl font-bold mb-4" data-testid="search-results-header">
@@ -472,7 +451,6 @@ function StudentDashboard({ user }) {
                       </div>
                     </div>
 
-                    {/* AI REASON BADGE (Shown for AI-only or Mixed) */}
                     {showAiRecommendations && faculty.recommendation_reason && (
                       <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md text-xs">
                         <p className="font-semibold text-blue-900 mb-1">Why you?</p>
@@ -496,8 +474,6 @@ function StudentDashboard({ user }) {
                         </div>
                       </div>
 
-                      {/* COMPATIBILITY SCORE BADGE */}
-                      {/* Only show if Rating Prefs are involved */}
                       {showCompatibilityScore && faculty.compatibility_percentage !== undefined && (
                         <div className="mt-3 pt-3 border-t border-border">
                           <div className="flex items-center justify-between">
@@ -520,7 +496,6 @@ function StudentDashboard({ user }) {
   );
 }
 
-// --- MAIN EXPORT ---
 export default function Dashboard({ user }) {
   if (user?.is_admin) {
     return <AdminView user={user} />;

@@ -14,7 +14,6 @@ import { toast } from 'sonner';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Ensure cookies are sent
 axios.defaults.withCredentials = true;
 
 const PREFERENCE_OPTIONS = [
@@ -80,7 +79,6 @@ export default function Profile({ user }) {
     }
   };
 
-  // Admin Check
   const isAdmin = user?.is_admin || false;
 
   return (
@@ -134,7 +132,6 @@ export default function Profile({ user }) {
                 </div>
               </div>
 
-              {/* Input Fields */}
               <div>
                 <Label htmlFor="name">Full Name</Label>
                 <Input
@@ -166,7 +163,6 @@ export default function Profile({ user }) {
                 </div>
               </div>
 
-              {/* Save Button */}
               <Button
                 onClick={handleSave}
                 disabled={saving}
@@ -179,10 +175,7 @@ export default function Profile({ user }) {
             </CardContent>
           </Card>
 
-          {/* Right Column Content */}
           <div className="space-y-6">
-
-            {/* ADMIN: Show Admin Info Box */}
             {isAdmin && (
               <Card className="border-l-4 border-blue-400 bg-blue-50/10">
                 <CardHeader>
@@ -203,7 +196,6 @@ export default function Profile({ user }) {
               </Card>
             )}
 
-            {/* STUDENT: Show Preferences */}
             {!isAdmin && (
               <>
                 <Card className="hover-lift" data-testid="preferences-section">
@@ -263,7 +255,6 @@ export default function Profile({ user }) {
                 </Card>
               </>
             )}
-
           </div>
         </div>
       </div>
