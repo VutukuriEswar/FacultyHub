@@ -7,8 +7,7 @@ import json
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
-
+from typing import List, Optional, Dict, Any, Union
 from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -108,7 +107,7 @@ class FacultyCreate(BaseModel):
     image_url: Optional[str] = None
     scholar_profile: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
-    research_interests: Optional[str] = None
+    research_interests: Optional[Union[str, List[str]]] = None 
     openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
 
 class FacultyUpdate(BaseModel):
@@ -118,7 +117,7 @@ class FacultyUpdate(BaseModel):
     image_url: Optional[str] = None
     scholar_profile: Optional[str] = None
     publications: Optional[List[str]] = None
-    research_interests: Optional[str] = None
+    research_interests: Optional[Union[str, List[str]]] = None
     openalex_projects: Optional[List[Dict[str, Any]]] = None
 
 class Rating(BaseModel):
@@ -624,9 +623,17 @@ async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(ge
         raise HTTPException(status_code=403, detail="Admin access required")
     
     faculty_id = f"faculty_{uuid.uuid4().hex[:12]}"
+    research_list = []
+    if faculty.research_interests:
+        if isinstance(faculty.research_interests, str):
+            research_list = [s.strip() for s in faculty.research_interests.split(',') if s.strip()]
+        elif isinstance(faculty.research_interests, list):
+            research_list = faculty.research_interests
+
     faculty_doc = {
         "faculty_id": faculty_id,
-        **faculty.model_dump(),
+        **faculty.model_dump(exclude_unset=True),
+        "research_interests": research_list,
         "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
         "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
         "openalex_projects": [],
@@ -634,14 +641,24 @@ async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(ge
     }
     
     await db.faculty.insert_one(faculty_doc)
-    return Faculty(**faculty_doc)
+    created_doc = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
+    
+    if not created_doc:
+        raise HTTPException(status_code=500, detail="Failed to retrieve created faculty")
+        
+    return Faculty(**created_doc)
 
 @api_router.patch("/faculty/{faculty_id}", response_model=Faculty)
 async def update_faculty(faculty_id: str, update: FacultyUpdate, current_user: User = Depends(get_current_user)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    update_data = {k: v for k, v in update.model_dump(exclude_unset=True).items() if v is not None}
+    
+    if "research_interests" in update_data:
+        raw_interests = update_data["research_interests"]
+        if isinstance(raw_interests, str):
+            update_data["research_interests"] = [s.strip() for s in raw_interests.split(',') if s.strip()]
     
     if update_data:
         result = await db.faculty.update_one(
@@ -651,8 +668,12 @@ async def update_faculty(faculty_id: str, update: FacultyUpdate, current_user: U
         
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Faculty not found")
-    
+
     faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id}, {"_id": 0})
+    
+    if not faculty_doc:
+         raise HTTPException(status_code=404, detail="Faculty not found")
+         
     if isinstance(faculty_doc["created_at"], str):
         faculty_doc["created_at"] = datetime.fromisoformat(faculty_doc["created_at"])
     
