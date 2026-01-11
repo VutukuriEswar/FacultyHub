@@ -61,6 +61,7 @@ class User(BaseModel):
     name: str
     picture: Optional[str] = None
     is_admin: bool = False
+    blocked: bool = False 
     preferences: List[str] = Field(default_factory=list)
     ai_interests: List[str] = Field(default_factory=list)
     created_at: datetime
@@ -85,6 +86,11 @@ class UserUpdate(BaseModel):
     preferences: Optional[List[str]] = None
     ai_interests: Optional[List[str]] = None
 
+# NEW MODEL FOR ADMIN UPDATE
+class UserAdminUpdate(BaseModel):
+    is_admin: Optional[bool] = None
+    blocked: Optional[bool] = None
+
 class Faculty(BaseModel):
     model_config = ConfigDict(extra="allow")
     faculty_id: str
@@ -94,7 +100,7 @@ class Faculty(BaseModel):
     image_url: Optional[str] = None
     scholar_profile: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
-    research_interests: List[str] = Field(default_factory=list) # List in New Code
+    research_interests: List[str] = Field(default_factory=list) 
     openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
     avg_ratings: Dict[str, float] = Field(default_factory=lambda: {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0})
     rating_counts: Dict[str, int] = Field(default_factory=lambda: {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0})
@@ -264,7 +270,7 @@ def load_faculty_from_csv():
                 "created_at": datetime.now(timezone.utc),
                 "avg_ratings": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
                 "rating_counts": {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-                "research_interests": research_list, # List
+                "research_interests": research_list, 
                 "office_address": addr_val,
                 "email": email_val,
                 "phone": phone_val,
@@ -324,7 +330,7 @@ def get_demo_faculty():
                 "research_interests": f"Research in {dept}",
                 "Specialisation": f"AI & ML in {dept}",
                 "Office Address": f"Block {i+1}, Room {100+i}",
-                "Email": f"{name.split(' ')[1].lower()}@vitap.ac.in",
+                "Email": f"{name.split(' ')[1].lower()}@vitapstudent.ac.in",
                 "Phone": f"+91 98765 432{i}",
                 "openalex_projects": [],
                 **base_data
@@ -425,7 +431,11 @@ async def startup_event():
 
         elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
-            
+        
+        # 3. Ensure blocked field exists
+        if 'blocked' not in user_doc:
+            update_data['blocked'] = False
+
         if update_data:
             await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
 
@@ -441,6 +451,7 @@ async def startup_event():
             "name": "System Administrator",
             "password_hash": get_password_hash(admin_pass),
             "is_admin": True,
+            "blocked": False, 
             "preferences": [],
             "ai_interests": [],
             "created_at": datetime.now(timezone.utc),
@@ -461,6 +472,7 @@ async def startup_event():
             "name": "Demo User",
             "password_hash": get_password_hash(demo_pass),
             "is_admin": False,
+            "blocked": False, 
             "preferences": [],
             "ai_interests": [],
             "created_at": datetime.now(timezone.utc),
@@ -492,6 +504,10 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
     
+    # BLOCKED CHECK
+    if user_doc.get("blocked", False):
+        raise HTTPException(status_code=403, detail="Your account has been blocked by the administrator.")
+    
     if isinstance(user_doc["created_at"], str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     
@@ -517,6 +533,7 @@ async def register_user(user_data: UserRegister):
         "password_hash": get_password_hash(user_data.password),
         "picture": None,
         "is_admin": False, 
+        "blocked": False, 
         "preferences": [],
         "ai_interests": [],
         "created_at": datetime.now(timezone.utc),
@@ -535,6 +552,11 @@ async def login_user(response: Response, login_data: UserLogin):
     if not user_doc:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
+    # Check blocked before password check to prevent revealing if user exists, but standard practice is usually check password first.
+    # Checking blocked here ensures they can't log in.
+    if user_doc.get("blocked", False):
+         raise HTTPException(status_code=403, detail="Account blocked")
+
     if not verify_password(login_data.password, user_doc.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -589,6 +611,67 @@ async def update_profile(update: UserUpdate, current_user: User = Depends(get_cu
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     
     return User(**user_doc)
+
+# --- ADMIN USER MANAGEMENT ROUTES ---
+
+@api_router.get("/admin/users")
+async def get_all_users(current_user: User = Depends(get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    cursor = db.users.find({}, {"password_hash": 0, "_id": 0}) # Don't send password hash
+    users = await cursor.to_list(1000)
+    
+    # Handle datetime serialization
+    for u in users:
+        if isinstance(u.get("created_at"), str):
+            u["created_at"] = datetime.fromisoformat(u["created_at"])
+            
+    return users
+
+@api_router.patch("/admin/users/{target_user_id}")
+async def admin_update_user(target_user_id: str, update: UserAdminUpdate, current_user: User = Depends(get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    if current_user.user_id == target_user_id:
+        raise HTTPException(status_code=400, detail="You cannot modify your own account.")
+        
+    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    
+    # PREVENT REVOKING ADMIN RIGHTS
+    if "is_admin" in update_data and update_data["is_admin"] is False:
+        raise HTTPException(status_code=400, detail="Revoking admin rights is not allowed.")
+        
+    result = await db.users.update_one(
+        {"user_id": target_user_id},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    return {"message": "User updated successfully"}
+
+@api_router.get("/users/{target_user_id}", response_model=User)
+async def get_user_profile(target_user_id: str, current_user: User = Depends(get_current_user)):
+    # Access Control: Can view own profile OR is Admin
+    if current_user.user_id != target_user_id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="You can only view your own profile")
+    
+    user_doc = await db.users.find_one({"user_id": target_user_id}, {"password_hash": 0, "_id": 0})
+    
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if isinstance(user_doc["created_at"], str):
+        user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
+        
+    return User(**user_doc)
+
 
 @api_router.get("/faculty", response_model=List[Faculty])
 async def get_all_faculty(department: Optional[str] = None):
@@ -730,7 +813,7 @@ async def submit_rating(faculty_id: str, rating: RatingSubmit, current_user: Use
                 else:
                     total = current_avg * current_count
                     new_total = total + new_val
-                    current_count += 1
+                    current_count +=1
                     new_avg = new_total / current_count
                 
                 await db.faculty.update_one(
@@ -798,12 +881,16 @@ async def get_my_rating(faculty_id: str, current_user: User = Depends(get_curren
     return Rating(**rating_doc)
 
 @api_router.get("/faculty/{faculty_id}/comments", response_model=List[Comment])
-async def get_comments(faculty_id: str):
+async def get_comments(faculty_id: str, current_user: User = Depends(get_current_user)):
     comments = await db.comments.find({"faculty_id": faculty_id}, {"_id": 0}).to_list(1000)
     
+    # Admin Identity Override
     for comment in comments:
         if isinstance(comment["created_at"], str):
             comment["created_at"] = datetime.fromisoformat(comment["created_at"])
+        
+        if current_user.is_admin:
+            comment["anonymous_handle"] = comment["user_name"]
     
     return comments
 
@@ -835,6 +922,8 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
     
     return {"message": "Comment created successfully", "comment_id": comment_id}
 
+# ... (Previous imports and setup remain the same) ...
+
 @api_router.delete("/comments/{comment_id}")
 async def delete_comment(comment_id: str, current_user: User = Depends(get_current_user)):
     comment_doc = await db.comments.find_one({"comment_id": comment_id}, {"_id": 0})
@@ -842,6 +931,7 @@ async def delete_comment(comment_id: str, current_user: User = Depends(get_curre
     if not comment_doc:
         raise HTTPException(status_code=404, detail="Comment not found")
     
+    # Check permission: User must be the creator OR an Admin
     if comment_doc["user_id"] != current_user.user_id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     
@@ -864,12 +954,29 @@ async def get_chats(current_user: User = Depends(get_current_user)):
                     "anonymous_chat_id": "You"
                 })
             else:
-                other_user = await db.users.find_one({"user_id": pid}, {"_id": 0, "anonymous_chat_id": 1})
-                handle = other_user.get("anonymous_chat_id", "Unknown") if other_user else "Unknown"
-                resolved_participants.append({
-                    "user_id": pid,
-                    "anonymous_chat_id": f"Anonymous@{handle}" # Format return as Anonymous@ID
-                })
+                other_user = await db.users.find_one({"user_id": pid}, {"_id": 0, "name": 1, "is_admin": 1, "anonymous_chat_id": 1})
+                if other_user:
+                    # Admin Identity Override Logic
+                    if current_user.is_admin:
+                        # Admin sees Real Name if it's a user, "Admin" if it's an admin
+                        handle = "Admin" if other_user.get("is_admin") else other_user.get("name", "Unknown")
+                    else:
+                        # Normal User sees "Admin" if other is admin, else Anonymous ID
+                        if other_user.get("is_admin"):
+                            handle = "Admin"
+                        else:
+                            handle = other_user.get("anonymous_chat_id", "Unknown")
+                            handle = f"Anonymous@{handle}" if handle != "Admin" else "Admin"
+                    
+                    resolved_participants.append({
+                        "user_id": pid,
+                        "anonymous_chat_id": handle
+                    })
+                else:
+                    resolved_participants.append({
+                        "user_id": pid,
+                        "anonymous_chat_id": "Unknown"
+                    })
         
         chat["participants"] = resolved_participants
 
@@ -877,12 +984,25 @@ async def get_chats(current_user: User = Depends(get_current_user)):
             chat["created_at"] = datetime.fromisoformat(chat["created_at"])
         if isinstance(chat["updated_at"], str):
             chat["updated_at"] = datetime.fromisoformat(chat["updated_at"])
+        
+        # Resolve Sender Names in Messages
         for msg in chat.get("messages", []):
             if isinstance(msg["created_at"], str):
                 msg["created_at"] = datetime.fromisoformat(msg["created_at"])
-            if "sender_anonymous_id" not in msg:
-                sender = await db.users.find_one({"user_id": msg["sender_id"]}, {"_id": 0, "anonymous_chat_id": 1})
-                msg["sender_anonymous_id"] = f"Anonymous@{sender.get('anonymous_chat_id', 'Unknown')}" if sender else "Unknown"
+            
+            if msg["sender_id"] == current_user.user_id:
+                continue # Don't need to resolve "You"
+
+            sender = await db.users.find_one({"user_id": msg["sender_id"]}, {"_id": 0, "name": 1, "is_admin": 1})
+            if sender:
+                if current_user.is_admin:
+                    # Admin sees Real Name
+                    msg["sender_anonymous_id"] = sender.get("name")
+                else:
+                    # Normal User logic
+                    if sender.get("is_admin"):
+                        msg["sender_anonymous_id"] = "Admin"
+                    # Else, keep what is in DB (Anonymous@ID)
     
     return chats_list
 
@@ -895,11 +1015,13 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         {"_id": 0}
     )
     
+    # Admin Identity Override for Storage
+    display_name = "Admin" if current_user.is_admin else f"Anonymous@{current_user.anonymous_id}"
+    
     new_message = {
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "sender_id": current_user.user_id,
-        # FIX: Use UNIFIED anonymous_id
-        "sender_anonymous_id": f"Anonymous@{current_user.anonymous_id}",
+        "sender_anonymous_id": display_name,
         "content": message.content,
         "created_at": datetime.now(timezone.utc)
     }
@@ -924,7 +1046,13 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         })
     
     room = f"chat_{chat_id}"
-    await sio.emit(room, new_message)
+    
+    # FIX: Catch socket errors to ensure the message is considered sent even if socket fails
+    try:
+        await sio.emit("message", new_message, room=room)
+    except Exception as e:
+        logging.error(f"Socket emit failed for room {room}: {e}")
+        # We do not raise here. The message is saved to DB, so it is "sent".
     
     return {"chat_id": chat_id, "message": new_message}
 
@@ -953,7 +1081,7 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
                 rating = fac['avg_ratings'][pref_key]
                 if rating > 0:
                     rating_compatibility += rating
-                    rating_count += 1
+                    rating_count +=1
 
         normalized_rating_score = 0
         if rating_count > 0:
@@ -1073,7 +1201,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
         
         if not clean_faculty_name:
             logging.error(f"Skipping faculty {faculty.get('name')}: Name became empty after cleaning")
-            skipped_count += 1
+            skipped_count +=1
             continue
             
         faculty_tokens = set(clean_name_string(clean_faculty_name).split())
@@ -1102,7 +1230,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
 
             logging.info(f"Searching for '{clean_faculty_name}' in VIT-AP authors...")
             
-            response_author = requests.get(url_author_search, params=params_author, headers=headers, timeout=15.0)
+            response_author = requests.get(url_author_search, params=params_author, headers=headers)
             
             # Search through VIT-AP authors to find name match
             if response_author.status_code == 200 and response_author.json().get("results"):

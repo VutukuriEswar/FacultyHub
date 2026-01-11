@@ -190,7 +190,7 @@ export default function Profile({ user }) {
                   <p className="text-blue-800 max-w-md mx-auto">
                     As an Administrator, you manage system data.
                     <br />
-                    Please use the <span className="font-semibold">Admin Panel</span> to manage faculty & sync data.
+                    Please use the <span className="font-semibold">Faculty</span> tab to manage faculty & the <span className="font-semibold">Users</span> tab to manage students.
                   </p>
                 </CardContent>
               </Card>

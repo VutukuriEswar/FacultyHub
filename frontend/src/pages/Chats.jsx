@@ -16,6 +16,30 @@ const socket = io(BACKEND_URL, {
   withCredentials: true
 });
 
+// WhatsApp style formatter
+const formatMessageDate = (dateString) => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  // Format time: 10:30 PM
+  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  if (isToday) {
+    return timeStr;
+  } else if (isYesterday) {
+    return `Yesterday, ${timeStr}`;
+  } else {
+    // Format date: 12/10/2023
+    const dateStr = date.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: 'numeric' });
+    return `${dateStr}, ${timeStr}`;
+  }
+};
+
 export default function Chats({ user }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -101,8 +125,10 @@ export default function Chats({ user }) {
   const handleSendMessage = async () => {
     if (!newMessage.trim()) return;
 
+    // Resolve Recipient ID safely
     let recipientId = location.state?.recipientId;
 
+    // If we don't have a state ID (e.g. replying in existing chat), get it from selectedChat
     if (!recipientId && selectedChat) {
       const other = selectedChat.participants.find((p) => p.user_id !== user.user_id);
       recipientId = other?.user_id;
@@ -143,6 +169,8 @@ export default function Chats({ user }) {
         recipient_id: recipientId,
         content: contentToSend
       });
+
+      // If it was a new chat (no selectedChat), reload the list to get the real chat ID
       if (!selectedChat) {
         loadChats();
       }
@@ -218,7 +246,7 @@ export default function Chats({ user }) {
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm truncate">
+                            <p className={`font-semibold text-sm truncate ${otherParticipant?.anonymous_chat_id === 'Admin' ? 'admin-highlight' : ''}`}>
                               {otherParticipant?.anonymous_chat_id || 'Unknown'}
                             </p>
                             <p className="text-xs text-muted-foreground truncate">
@@ -239,16 +267,20 @@ export default function Chats({ user }) {
                   <CardHeader className="border-b">
                     <CardTitle>
                       {selectedChat
-                        ? (getOtherParticipant(selectedChat)?.anonymous_chat_id || 'Chat')
+                        ? (
+                          <span className={getOtherParticipant(selectedChat)?.anonymous_chat_id === 'Admin' ? 'admin-highlight' : ''}>
+                            {getOtherParticipant(selectedChat)?.anonymous_chat_id || 'Chat'}
+                          </span>
+                        )
                         : 'New Chat'
                       }
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-0 flex flex-col h-[500px]">
                     <div className="flex-1 overflow-y-auto p-6 space-y-4" data-testid="messages-container">
-                      {/* Safety: Use optional chaining for messages */}
                       {(selectedChat?.messages || []).map(msg => {
                         const isMe = msg.sender_id === user.user_id;
+                        const isAdminSender = msg.sender_anonymous_id === "Admin" && !isMe;
                         return (
                           <div
                             key={msg.message_id}
@@ -256,18 +288,20 @@ export default function Chats({ user }) {
                             data-testid={`message-${msg.message_id}`}
                           >
                             <div
-                              className={`max-w-[70%] rounded-2xl px-4 py-2 ${isMe
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-muted'
+                              className={`max-w-[70%] rounded-2xl px-4 py-2 ${isAdminSender
+                                ? 'bg-gradient-to-r from-pink-500 to-red-500 text-white'
+                                : isMe
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-muted'
                                 }`}
                             >
                               <p className="text-sm">{msg.content}</p>
-                              <div className="flex items-center justify-between gap-2 mt-1">
-                                <p className="text-[10px] opacity-70 font-mono">
+                              <div className={`flex items-center justify-end gap-2 mt-1 ${isAdminSender ? 'text-white' : 'text-muted-foreground'}`}>
+                                <p className={`text-[10px] opacity-70 font-mono`}>
                                   {isMe ? 'You' : (msg.sender_anonymous_id || 'Unknown')}
                                 </p>
-                                <p className="text-xs opacity-70">
-                                  {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                <p className={`text-xs opacity-70`}>
+                                  {formatMessageDate(msg.created_at)}
                                 </p>
                               </div>
                             </div>

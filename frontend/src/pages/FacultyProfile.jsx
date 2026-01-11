@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, ArrowLeft, MessageSquare, Send, Reply, MapPin, Mail, Phone as PhoneIcon, BookOpen, ExternalLink } from 'lucide-react';
+import { Star, ArrowLeft, MessageSquare, Send, Reply, MapPin, Mail, Phone as PhoneIcon, BookOpen, ExternalLink, Trash } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -104,6 +104,21 @@ export default function FacultyProfile({ user }) {
     } catch (error) {
       console.error('Error posting comment:', error);
       toast.error('Failed to post comment');
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    if (!window.confirm('Are you sure you want to delete this comment?')) {
+      return;
+    }
+
+    try {
+      await axios.delete(`${API}/comments/${commentId}`);
+      toast.success('Comment deleted');
+      loadData(); // Reload to update UI
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      toast.error('Failed to delete comment');
     }
   };
 
@@ -418,13 +433,27 @@ export default function FacultyProfile({ user }) {
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-semibold text-sm">
-                          {comment.anonymous_handle || comment.user_name}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(comment.created_at).toLocaleDateString()}
-                        </span>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-sm">
+                            {comment.anonymous_handle || comment.user_name}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(comment.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                        {/* Delete Button for Admin/Owner */}
+                        {(comment.user_id === user?.user_id || user?.is_admin) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteComment(comment.comment_id)}
+                            className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                            data-testid={`delete-comment-${comment.comment_id}`}
+                          >
+                            <Trash className="w-3 h-3" />
+                          </Button>
+                        )}
                       </div>
                       <p className="text-sm mb-2">{comment.content}</p>
                       <div className="flex gap-2">
@@ -466,13 +495,27 @@ export default function FacultyProfile({ user }) {
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-semibold text-sm">
-                              {reply.anonymous_handle || reply.user_name}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(reply.created_at).toLocaleDateString()}
-                            </span>
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-sm">
+                                {reply.anonymous_handle || reply.user_name}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(reply.created_at).toLocaleDateString()}
+                              </span>
+                            </div>
+                            {/* Delete Button for Admin/Owner (Reply) */}
+                            {(reply.user_id === user?.user_id || user?.is_admin) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteComment(reply.comment_id)}
+                                className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                                data-testid={`delete-reply-${reply.comment_id}`}
+                              >
+                                <Trash className="w-3 h-3" />
+                              </Button>
+                            )}
                           </div>
                           <p className="text-sm mb-2">{reply.content}</p>
                           {reply.user_id !== user?.user_id && (

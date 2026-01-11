@@ -10,6 +10,8 @@ import Rankings from '@/pages/Rankings';
 import AdminPanel from '@/pages/AdminPanel';
 import Profile from '@/pages/Profile';
 import Chats from '@/pages/Chats';
+import UserManagement from '@/pages/UserManagement';
+import UserProfileView from '@/pages/UserProfileView';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -22,7 +24,6 @@ const ProtectedRoute = ({ children }) => {
   const location = useLocation();
 
   useEffect(() => {
-
     if (location.state?.user) {
       setUser(location.state.user);
       setIsAuthenticated(true);
@@ -90,6 +91,22 @@ function AppRouter() {
         element={
           <ProtectedRoute>
             {({ user }) => <AdminPanel user={user} />}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/users"
+        element={
+          <ProtectedRoute>
+            {({ user }) => <UserManagement user={user} />}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/users/:userId"
+        element={
+          <ProtectedRoute>
+            {({ user }) => <UserProfileView user={user} />}
           </ProtectedRoute>
         }
       />

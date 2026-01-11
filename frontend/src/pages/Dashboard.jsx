@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings } from 'lucide-react';
+import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -89,8 +89,16 @@ function AdminView({ user }) {
                   className="text-primary font-semibold hover:bg-primary/10"
                   data-testid="nav-admin-button"
                 >
-                  <Shield className="w-4 h-4 mr-2" />
-                  Admin Panel
+                  <Settings className="w-4 h-4 mr-2" />
+                  Faculty
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate('/admin/users')}
+                  className="text-blue-600 font-semibold hover:bg-blue-50"
+                >
+                  <Users className="w-4 h-4 mr-2" />
+                  Users
                 </Button>
               </nav>
             </div>
@@ -171,7 +179,6 @@ function AdminView({ user }) {
                       </div>
                     </div>
 
-                    {/* Admin View: Just Ratings */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-muted-foreground">Overall Rating</span>

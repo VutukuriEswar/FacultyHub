@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Plus, Edit, Trash, Save, X, Database } from 'lucide-react'; // Added Database icon
+import { ArrowLeft, Plus, Edit, Trash, Save, X, Database } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,7 +33,7 @@ export default function AdminPanel({ user }) {
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingFaculty, setEditingFaculty] = useState(null);
-  const [isSyncing, setIsSyncing] = useState(false); // NEW STATE
+  const [isSyncing, setIsSyncing] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     department: 'SCOPE',
@@ -169,7 +169,7 @@ export default function AdminPanel({ user }) {
         </Button>
 
         <div className="flex items-center justify-between mb-8">
-          <h1 className="text-4xl font-bold gradient-text" data-testid="admin-header">Admin Panel</h1>
+          <h1 className="text-4xl font-bold gradient-text" data-testid="admin-header">Faculty</h1>
           <div className="flex gap-2">
 
             <Button

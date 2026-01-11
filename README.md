@@ -1,31 +1,39 @@
 ## What is VITAP Faculty Hub?
 
-VITAP Faculty Hub is a web application designed to bridge the gap between students and faculty at VIT-AP University. It transforms the faculty directory into an interactive platform where students can discover professors, analyze research interests, and provide constructive feedback.
+VITAP Faculty Hub is a web application designed to bridge the gap between students and faculty at VIT-AP University. It transforms the faculty directory into an interactive platform where students can discover professors, analyze research interests, and provide constructive feedback, all while maintaining privacy and fostering community.
 
 ## Key Features
 
 👨‍🏫 **Comprehensive Faculty Discovery**
 - Browse the complete VIT-AP faculty database
 - Access detailed profiles including research interests and contact info
+- View OpenAlex integrated research projects and publications
 
 ⭐ **Interactive Rating System**
 - Rate faculty on Teaching, Attendance, and Doubt Clarification
 - View average ratings and overall score
 - Contribute to a transparent feedback loop
 
-💬 **Community & Communication**
+💬 **Anonymous Community & Moderation**
 - Engage in public discussions via faculty-specific comments
-- Connect directly with peers using real-time chat functionality
-- Share experiences and advice in a secure environment
+- **Privacy First:** Users appear as "Anonymous@ID" to other students.
+- **Admin Oversight:** Admins can view real names and moderate content.
+- **Content Management:** Users can delete their own comments; Admins can delete any comment.
+
+💬 **Real-time Communication**
+- Connect directly with peers using real-time Socket.IO chat functionality.
+- **WhatsApp-Style UI:** Messages display timestamps dynamically (e.g., "10:30 AM", "Yesterday, 5:00 PM").
+- **Admin Visibility:** Messages from Admins are highlighted for easy identification.
 
 🤖 **Smart Recommendations**
-- Get faculty recommendations based on your research interests
-- Match keywords with OpenAlex data to find mentors in your field
-- Prioritized scoring based on your preferences and ratings
+- Get faculty recommendations based on your research interests (AI, ML, Robotics, etc.).
+- Match keywords with OpenAlex data to find mentors in your field.
+- Prioritized scoring based on your rating preferences.
 
-🔍 **Real-time Research Data**
-- Admin integration with OpenAlex API
-- Automatically syncs latest publications and projects
+🔐 **Admin & User Management**
+- **User Control:** Admins can view all user profiles, grant Admin rights, or Block/Unblock accounts.
+- **Data Sync:** Admin integration with OpenAlex API to auto-sync latest publications.
+- **Comment Moderation:** Admins can delete inappropriate comments instantly.
 
 ## Tech Stack
 
@@ -35,11 +43,13 @@ VITAP Faculty Hub is a web application designed to bridge the gap between studen
 - Bcrypt for secure password hashing
 - Pandas for CSV data processing
 - OpenAlex API for research data synchronization
+- Python-Socket.IO for real-time WebSocket communication
 
 **Frontend:**
 - React for UI components
 - JSX for dynamic page rendering
 - Tailwind CSS for styling
+- Socket.IO Client for real-time chat
 - Craco for configuration management
 
 ## Quick Start Guide
@@ -66,9 +76,9 @@ cd backend
 pip install -r requirements.txt
 ```
 
-4. **Run the backend server**
+4. **Run backend server**
 ```bash
-uvicorn server:app --reload
+uvicorn server:socket_app --reload
 ```
 
 5. **Open a new terminal and open the same virtual environment here as well**
@@ -82,7 +92,6 @@ cd frontend
 yarn install
 yarn start
 ```
-
 
 ## API Endpoints
 
@@ -104,7 +113,12 @@ yarn start
 - GET /api/faculty/{id}/ratings/me - Get your rating for a faculty
 - GET /api/faculty/{id}/comments - View all comments
 - POST /api/faculty/{id}/comments - Add a new comment
-- DELETE /api/comments/{id} - Delete a comment
+- DELETE /api/comments/{id} - Delete a comment (Owner or Admin only)
+
+**User Management (Admin):**
+- GET /api/admin/users - Get list of all registered users (Admin only)
+- PATCH /api/admin/users/{id} - Update user status (Make Admin/Block) (Admin only)
+- GET /api/users/{id} - View specific user profile (Self or Admin only)
 
 **Recommendations & Rankings:**
 - GET /api/recommendations - Get personalized faculty suggestions
@@ -132,4 +146,4 @@ yarn start
 
 ## Acknowledgments
 
-Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework. We thank you from the bottom of our hearts for helping us complete this project
+Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, and the Socket.IO community for real-time capabilities. We thank you from the bottom of our hearts for helping us complete this project.
