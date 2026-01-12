@@ -65,9 +65,7 @@ class User(BaseModel):
     preferences: List[str] = Field(default_factory=list)
     ai_interests: List[str] = Field(default_factory=list)
     created_at: datetime
-    # UNIFIED ANONYMOUS ID
     anonymous_id: Optional[str] = None 
-    # Legacy fields for backwards compatibility
     anonymous_chat_id: Optional[str] = None
     anonymous_comment_id: Optional[str] = None
 
@@ -86,7 +84,6 @@ class UserUpdate(BaseModel):
     preferences: Optional[List[str]] = None
     ai_interests: Optional[List[str]] = None
 
-# NEW MODEL FOR ADMIN UPDATE
 class UserAdminUpdate(BaseModel):
     is_admin: Optional[bool] = None
     blocked: Optional[bool] = None
@@ -185,8 +182,6 @@ def load_faculty_from_csv():
         return None
     try:
         df = pd.read_csv(file_path)
-        
-        # Drop profile column
         profile_cols = ['Profile_URL', 'Profile URL', 'Profile', 'Link']
         for col in profile_cols:
             if col in df.columns:
@@ -194,7 +189,6 @@ def load_faculty_from_csv():
             
         faculty_list = []
         
-        # Helper to find column regardless of case or spaces
         def get_col_val(target_names):
             for name in target_names:
                 if name in df.columns:
@@ -204,7 +198,6 @@ def load_faculty_from_csv():
                         return df[col]
             return pd.Series([None] * len(df), index=df.index)
 
-        # Extract columns
         names = get_col_val(['Name'])
         departments = get_col_val(['Department'])
         designations = get_col_val(['Designation'])
@@ -217,17 +210,11 @@ def load_faculty_from_csv():
         KNOWN_DEPTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
 
         for index, row in df.iterrows():
-            faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"
-            
-            # Name
+            faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"    
             raw_name = names.iloc[index]
             name_val = "Unknown" if pd.isna(raw_name) or str(raw_name).strip() == "" else raw_name
-
-            # Department
             raw_dept = departments.iloc[index]
             dept_val = "Unknown" if pd.isna(raw_dept) else raw_dept
-
-            # Designation
             raw_des = designations.iloc[index]
             if dept_val == "Unknown" and not pd.isna(raw_des) and isinstance(raw_des, str):
                 for d in KNOWN_DEPTS:
@@ -241,15 +228,12 @@ def load_faculty_from_csv():
                 if not cleaned_des: cleaned_des = raw_des
             else:
                 cleaned_des = "Unknown"
-
-            # Image
             img_raw = images.iloc[index]
             if pd.isna(img_raw) or str(img_raw).strip() == "":
                 img_val = None
             else:
                 img_val = str(img_raw).strip()
             
-            # Research Interests (Convert String to List)
             res_val = None if pd.isna(research_ints.iloc[index]) else research_ints.iloc[index]
             research_list = []
             if res_val and pd.notna(res_val):
@@ -276,7 +260,6 @@ def load_faculty_from_csv():
                 "phone": phone_val,
             }
             
-            # Dynamic Columns
             skipped_cols = ['Name', 'Name of Faculty', 'Faculty Name', 
                             'Department', 'Dept', 'School Name', 'School Name',
                             'Designation', 'Title', 'Position', 'Role',
@@ -421,8 +404,8 @@ async def startup_event():
         if not user_doc.get('anonymous_id'):
             new_id = str(random.randint(1000, 9999))
             update_data['anonymous_id'] = new_id
-            update_data['anonymous_chat_id'] = new_id # Sync Chat ID
-            update_data['anonymous_comment_id'] = new_id # Sync Comment ID
+            update_data['anonymous_chat_id'] = new_id
+            update_data['anonymous_comment_id'] = new_id
             logging.info(f"Generated unified Anonymous ID {new_id} for user {user_doc.get('email')}")
         
         # 2. If Unified ID exists but other fields are mismatched (legacy data), fix them
@@ -481,10 +464,8 @@ async def startup_event():
             "anonymous_comment_id": unified_id
         })
 
-# Auth Helper
 async def get_current_user(request: Request, session_token: Optional[str] = Cookie(None)) -> User:
     token = session_token or request.headers.get("Authorization", "").replace("Bearer ", "")
-    
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -504,7 +485,6 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # BLOCKED CHECK
     if user_doc.get("blocked", False):
         raise HTTPException(status_code=403, detail="Your account has been blocked by the administrator.")
     
@@ -513,7 +493,6 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
     
     return User(**user_doc)
 
-# Auth Routes
 @api_router.post("/auth/register")
 async def register_user(user_data: UserRegister):
     if not user_data.email.endswith("@vitapstudent.ac.in"):
@@ -552,8 +531,6 @@ async def login_user(response: Response, login_data: UserLogin):
     if not user_doc:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    # Check blocked before password check to prevent revealing if user exists, but standard practice is usually check password first.
-    # Checking blocked here ensures they can't log in.
     if user_doc.get("blocked", False):
          raise HTTPException(status_code=403, detail="Account blocked")
 
@@ -612,17 +589,14 @@ async def update_profile(update: UserUpdate, current_user: User = Depends(get_cu
     
     return User(**user_doc)
 
-# --- ADMIN USER MANAGEMENT ROUTES ---
-
 @api_router.get("/admin/users")
 async def get_all_users(current_user: User = Depends(get_current_user)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    cursor = db.users.find({}, {"password_hash": 0, "_id": 0}) # Don't send password hash
+    cursor = db.users.find({}, {"password_hash": 0, "_id": 0})
     users = await cursor.to_list(1000)
     
-    # Handle datetime serialization
     for u in users:
         if isinstance(u.get("created_at"), str):
             u["created_at"] = datetime.fromisoformat(u["created_at"])
@@ -642,7 +616,6 @@ async def admin_update_user(target_user_id: str, update: UserAdminUpdate, curren
     if not update_data:
         raise HTTPException(status_code=400, detail="No updates provided")
     
-    # PREVENT REVOKING ADMIN RIGHTS
     if "is_admin" in update_data and update_data["is_admin"] is False:
         raise HTTPException(status_code=400, detail="Revoking admin rights is not allowed.")
         
@@ -658,7 +631,6 @@ async def admin_update_user(target_user_id: str, update: UserAdminUpdate, curren
 
 @api_router.get("/users/{target_user_id}", response_model=User)
 async def get_user_profile(target_user_id: str, current_user: User = Depends(get_current_user)):
-    # Access Control: Can view own profile OR is Admin
     if current_user.user_id != target_user_id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="You can only view your own profile")
     
@@ -884,7 +856,6 @@ async def get_my_rating(faculty_id: str, current_user: User = Depends(get_curren
 async def get_comments(faculty_id: str, current_user: User = Depends(get_current_user)):
     comments = await db.comments.find({"faculty_id": faculty_id}, {"_id": 0}).to_list(1000)
     
-    # Admin Identity Override
     for comment in comments:
         if isinstance(comment["created_at"], str):
             comment["created_at"] = datetime.fromisoformat(comment["created_at"])
@@ -896,16 +867,12 @@ async def get_comments(faculty_id: str, current_user: User = Depends(get_current
 
 @api_router.post("/faculty/{faculty_id}/comments")
 async def create_comment(faculty_id: str, comment: CommentCreate, current_user: User = Depends(get_current_user)):
-    # GATE: Check if user has rated this faculty
     rating_doc = await db.ratings.find_one({"faculty_id": faculty_id, "user_id": current_user.user_id})
     if not rating_doc:
         raise HTTPException(status_code=403, detail="You must rate this faculty before commenting.")
 
-    comment_id = f"comment_{uuid.uuid4().hex[:12]}"
-    
-    # FIX: Use UNIFIED anonymous_id
+    comment_id = f"comment_{uuid.uuid4().hex[:12]}"    
     anonymous_handle = f"Anonymous@{current_user.anonymous_id}"
-    
     comment_doc = {
         "comment_id": comment_id,
         "faculty_id": faculty_id,
@@ -922,8 +889,6 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
     
     return {"message": "Comment created successfully", "comment_id": comment_id}
 
-# ... (Previous imports and setup remain the same) ...
-
 @api_router.delete("/comments/{comment_id}")
 async def delete_comment(comment_id: str, current_user: User = Depends(get_current_user)):
     comment_doc = await db.comments.find_one({"comment_id": comment_id}, {"_id": 0})
@@ -931,7 +896,6 @@ async def delete_comment(comment_id: str, current_user: User = Depends(get_curre
     if not comment_doc:
         raise HTTPException(status_code=404, detail="Comment not found")
     
-    # Check permission: User must be the creator OR an Admin
     if comment_doc["user_id"] != current_user.user_id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     
@@ -956,12 +920,9 @@ async def get_chats(current_user: User = Depends(get_current_user)):
             else:
                 other_user = await db.users.find_one({"user_id": pid}, {"_id": 0, "name": 1, "is_admin": 1, "anonymous_chat_id": 1})
                 if other_user:
-                    # Admin Identity Override Logic
                     if current_user.is_admin:
-                        # Admin sees Real Name if it's a user, "Admin" if it's an admin
                         handle = "Admin" if other_user.get("is_admin") else other_user.get("name", "Unknown")
                     else:
-                        # Normal User sees "Admin" if other is admin, else Anonymous ID
                         if other_user.get("is_admin"):
                             handle = "Admin"
                         else:
@@ -985,24 +946,20 @@ async def get_chats(current_user: User = Depends(get_current_user)):
         if isinstance(chat["updated_at"], str):
             chat["updated_at"] = datetime.fromisoformat(chat["updated_at"])
         
-        # Resolve Sender Names in Messages
         for msg in chat.get("messages", []):
             if isinstance(msg["created_at"], str):
                 msg["created_at"] = datetime.fromisoformat(msg["created_at"])
             
             if msg["sender_id"] == current_user.user_id:
-                continue # Don't need to resolve "You"
+                continue
 
             sender = await db.users.find_one({"user_id": msg["sender_id"]}, {"_id": 0, "name": 1, "is_admin": 1})
             if sender:
                 if current_user.is_admin:
-                    # Admin sees Real Name
                     msg["sender_anonymous_id"] = sender.get("name")
                 else:
-                    # Normal User logic
                     if sender.get("is_admin"):
                         msg["sender_anonymous_id"] = "Admin"
-                    # Else, keep what is in DB (Anonymous@ID)
     
     return chats_list
 
@@ -1015,9 +972,7 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         {"_id": 0}
     )
     
-    # Admin Identity Override for Storage
-    display_name = "Admin" if current_user.is_admin else f"Anonymous@{current_user.anonymous_id}"
-    
+    display_name = "Admin" if current_user.is_admin else f"Anonymous@{current_user.anonymous_id}"    
     new_message = {
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "sender_id": current_user.user_id,
@@ -1047,12 +1002,10 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
     
     room = f"chat_{chat_id}"
     
-    # FIX: Catch socket errors to ensure the message is considered sent even if socket fails
     try:
         await sio.emit("message", new_message, room=room)
     except Exception as e:
         logging.error(f"Socket emit failed for room {room}: {e}")
-        # We do not raise here. The message is saved to DB, so it is "sent".
     
     return {"chat_id": chat_id, "message": new_message}
 
@@ -1087,8 +1040,7 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
         if rating_count > 0:
             normalized_rating_score = (rating_compatibility / rating_count) * 20 
         else:
-             # No ratings in selected categories, check for fallback to Overall
-             if 'overall' in fac['avg_ratings'] and fac['avg_ratings']['overall'] > 0:
+            if 'overall' in fac['avg_ratings'] and fac['avg_ratings']['overall'] > 0:
                  normalized_rating_score = fac['avg_ratings']['overall'] * 20
 
         match_found = False
@@ -1108,7 +1060,6 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
             
             search_text = search_text.lower()
             
-            # Intelligent Matching Loop
             for interest in user_ai_interests:
                 interest_lower = interest.lower()
                 
@@ -1174,7 +1125,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
     
     logging.info("Starting OpenAlex Sync (VIT-AP University Only)...")
     
-    # 1. Get all faculty to sync
     all_faculty_data = await db.faculty.find({}, {"_id": 0}).to_list(1000)
     
     updated_count = 0
@@ -1183,12 +1133,9 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
     processed_names = []
 
     def clean_name_string(name_str):
-        """Lowercase, remove punctuation."""
         return name_str.lower().replace(",", "").replace(".", "").strip()
 
     for faculty in all_faculty_data:
-        
-        # Step 1: Clean Faculty Name
         raw_name = faculty["name"]
         prefixes_to_remove = [
             "dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", 
@@ -1218,7 +1165,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
         target_author_id = None
 
         try:
-            # Step 2: Search for Author Affiliated with VIT-AP University
             url_author_search = "https://api.openalex.org/authors"
             params_author = {
                 "filter": f"last_known_institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
@@ -1243,16 +1189,13 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                     author_id = author.get("id", "")
                     author_tokens = set(clean_name_string(author_display).split())
 
-                    # 1. Exact Set Match (Handles "Anil Vitthalrao Turukmane" <-> "Turukmane Anil Vitthalrao")
                     if faculty_tokens == author_tokens:
                         target_author_id = author_id
                         logging.info(f"✓ Exact Match Found: '{raw_name}' <-> '{author_display}'")
                         found_match = True
                         break
                     
-                    # 2. Subset Match (Handles missing middle names)
                     if faculty_tokens.issubset(author_tokens) or author_tokens.issubset(faculty_tokens):
-                         # Check similarity ratio loosely to avoid false positives
                         overlap = len(faculty_tokens & author_tokens)
                         if overlap >= min(len(faculty_tokens), len(author_tokens)):
                             target_author_id = author_id
@@ -1260,7 +1203,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                             found_match = True
                             break
 
-                    # 3. Initial Matching (Handles "Anil Vitthalrao Turukmane" <-> "A V Turukmane")
                     full_author_tokens = [t for t in author_tokens if len(t) >1]
                     if any(t not in faculty_tokens for t in full_author_tokens):
                         continue
@@ -1297,9 +1239,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 skipped_count += 1
                 continue
 
-            # Step 3: Fetch Works for the Matched Author
             url_works_final = "https://api.openalex.org/works"
-
             params_final = {
                 #"filter": f"authorships.author.id:{target_author_id}",  #All Works
                 "filter": f"authorships.author.id:{target_author_id},authorships.institutions.lineage:{VIT_INSTITUTION_LINEAGE}",   #VIT-AP Works
@@ -1329,7 +1269,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                         year_data = res.get("publication_year")
                         pub_year = str(year_data) if year_data else "Unknown"
                         pub_type = str(res.get("type", "") or "article")
-                        
                         clean_projects.append({
                             "openalex_id": openalex_id,
                             "title": title,
@@ -1367,13 +1306,10 @@ async def get_rankings(department: Optional[str] = None, category: str = "overal
         return []
 
     faculty_list = await get_all_faculty(department=department)
-    
     total_ratings = sum(f['avg_ratings'].get(category, 0) * f['rating_counts'].get(category, 0) for f in faculty_list)
     total_count = sum(f['rating_counts'].get(category, 0) for f in faculty_list)
     mean_rating = total_ratings / total_count if total_count > 0 else 3.0
-    
     C = 10
-    
     rankings = []
     for fac in faculty_list:
         avg_rating = fac['avg_ratings'].get(category, 0)

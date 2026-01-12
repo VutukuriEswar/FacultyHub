@@ -16,7 +16,6 @@ const socket = io(BACKEND_URL, {
   withCredentials: true
 });
 
-// WhatsApp style formatter
 const formatMessageDate = (dateString) => {
   const date = new Date(dateString);
   const now = new Date();
@@ -26,7 +25,6 @@ const formatMessageDate = (dateString) => {
   yesterday.setDate(yesterday.getDate() - 1);
   const isYesterday = date.toDateString() === yesterday.toDateString();
 
-  // Format time: 10:30 PM
   const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   if (isToday) {
@@ -34,7 +32,6 @@ const formatMessageDate = (dateString) => {
   } else if (isYesterday) {
     return `Yesterday, ${timeStr}`;
   } else {
-    // Format date: 12/10/2023
     const dateStr = date.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: 'numeric' });
     return `${dateStr}, ${timeStr}`;
   }
@@ -124,11 +121,7 @@ export default function Chats({ user }) {
 
   const handleSendMessage = async () => {
     if (!newMessage.trim()) return;
-
-    // Resolve Recipient ID safely
     let recipientId = location.state?.recipientId;
-
-    // If we don't have a state ID (e.g. replying in existing chat), get it from selectedChat
     if (!recipientId && selectedChat) {
       const other = selectedChat.participants.find((p) => p.user_id !== user.user_id);
       recipientId = other?.user_id;
@@ -170,7 +163,6 @@ export default function Chats({ user }) {
         content: contentToSend
       });
 
-      // If it was a new chat (no selectedChat), reload the list to get the real chat ID
       if (!selectedChat) {
         loadChats();
       }

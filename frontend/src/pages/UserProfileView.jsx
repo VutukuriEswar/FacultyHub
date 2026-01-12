@@ -74,7 +74,7 @@ export default function UserProfileView({ user }) {
                 is_admin: true
             });
             toast.success(`User is now an admin`);
-            loadUserProfile(); // Reload to update UI
+            loadUserProfile();
         } catch (error) {
             console.error('Error updating user:', error);
             toast.error(error.response?.data?.detail || 'Failed to update user');

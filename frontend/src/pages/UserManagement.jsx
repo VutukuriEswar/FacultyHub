@@ -34,7 +34,6 @@ export default function UserManagement({ user }) {
     useEffect(() => {
         const lowerQuery = searchQuery.toLowerCase();
         const filtered = users.filter(u =>
-            // Filter out self from the list first
             u.user_id !== user.user_id &&
             (u.name.toLowerCase().includes(lowerQuery) || u.email.toLowerCase().includes(lowerQuery))
         );

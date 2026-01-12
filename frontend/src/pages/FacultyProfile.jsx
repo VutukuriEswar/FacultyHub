@@ -115,7 +115,7 @@ export default function FacultyProfile({ user }) {
     try {
       await axios.delete(`${API}/comments/${commentId}`);
       toast.success('Comment deleted');
-      loadData(); // Reload to update UI
+      loadData();
     } catch (error) {
       console.error('Error deleting comment:', error);
       toast.error('Failed to delete comment');
