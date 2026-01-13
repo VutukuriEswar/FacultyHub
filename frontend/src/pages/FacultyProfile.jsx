@@ -12,21 +12,10 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-
-// CHART IMPORTS
 import {
-  PieChart,
-  Pie,
-  Cell,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  BarChart,
-  Bar,
-  Tooltip,
-  ResponsiveContainer,
+  PieChart, Pie, Cell, AreaChart, Area,
+  XAxis, YAxis, CartesianGrid, BarChart, Bar,
+  Tooltip, ResponsiveContainer,
 } from 'recharts';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -39,10 +28,8 @@ const RATING_CATEGORIES = [
   { key: 'doubt_clarification', label: 'Doubt Clarification' }
 ];
 
-// --- CHART COLORS ---
 const COLORS_TYPE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
-// --- CUSTOM TOOLTIP ---
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     const value = payload[0].value;
@@ -60,7 +47,6 @@ const CustomTooltip = ({ active, payload, label }) => {
   return null;
 };
 
-// --- RADIAL PROGRESS CARD COMPONENT ---
 const RadialProgressCard = ({ label, value, total, color }) => {
   const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
   const radius = 18;
@@ -120,28 +106,22 @@ export default function FacultyProfile({ user }) {
   const [tempRatings, setTempRatings] = useState({});
   const [showAllPublications, setShowAllPublications] = useState(false);
 
-  // --- CHART DATA PROCESSING ---
   const chartData = useMemo(() => {
     if (!faculty?.openalex_projects) return { typeData: [], citationsData: [], yearData: [], totalWorks: 0 };
 
     const typeCounts = {};
     const yearCounts = {};
-    const citationsByYear = {}; // Aggregate citations
+    const citationsByYear = {};
     let totalWorks = 0;
     let totalCitations = 0;
 
     faculty.openalex_projects.forEach(p => {
-      // Type Data
       let type = p.type || 'Unknown';
       type = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
       typeCounts[type] = (typeCounts[type] || 0) + 1;
       totalWorks++;
-
-      // Year Data (Volume)
       const year = p.publication_year || 'Unknown';
       yearCounts[year] = (yearCounts[year] || 0) + 1;
-
-      // Citation Data (Impact)
       const citations = p.cited_by_count || 0;
       if (year !== 'Unknown') {
         citationsByYear[year] = (citationsByYear[year] || 0) + citations;

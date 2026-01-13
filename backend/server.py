@@ -16,11 +16,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 import bcrypt
 
-# --- WEBSOCKET IMPORTS ---
 import socketio
 from fastapi.staticfiles import StaticFiles
 
-# --- PASSWORD HASHING IMPORTS ---
 def get_password_hash(password):
     pwd_bytes = password.encode('utf-8')
     salt = bcrypt.gensalt()
@@ -35,16 +33,13 @@ def verify_password(plain_password, hashed_password):
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'faculty_hub')]
 
-# --- WEBSOCKET SETUP ---
 _cors_env = os.environ.get('CORS_ORIGINS', 'http://localhost:3000')
 cors_origins = _cors_env.split(',')
 
-# Create a Socket.IO async server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=cors_origins)
 app = FastAPI()
 socket_app = socketio.ASGIApp(sio, app)
@@ -53,7 +48,6 @@ api_router = APIRouter(prefix="/api")
 
 VIT_INSTITUTION_LINEAGE = "i4401726783"
 
-# --- MODELS ---
 class User(BaseModel):
     model_config = ConfigDict(extra="allow")
     user_id: str
@@ -322,49 +316,42 @@ def get_demo_faculty():
 
     all_faculty = []
     
-    # SCOPE
     all_faculty.extend(gen_dept_faculty('SCOPE', [
         "Dr. Ada Lovelace", "Prof. Alan Turing", "Dr. Grace Hopper", "Prof. Donald Knuth",
         "Dr. Linus Torvalds", "Prof. Tim Berners-Lee", "Dr. Margaret Hamilton", "Prof. Dennis Ritchie",
         "Dr. Sophie Wilson", "Prof. Guido van Rossum"
     ], ["Professor", "Associate Professor", "Assistant Professor", "HOD"]))
 
-    # SENSE
     all_faculty.extend(gen_dept_faculty('SENSE', [
         "Dr. Nikola Tesla", "Prof. Michael Faraday", "Dr. Guglielmo Marconi", "Prof. Samuel Morse",
         "Dr. Claude Shannon", "Prof. Jack Kilby", "Dr. Robert Noyce", "Prof. Gordon Moore",
         "Dr. Andrew Grove", "Prof. Robert Hall"
     ], ["Dean", "Professor", "Associate Professor", "Assistant Professor"]))
 
-    # SMEC
     all_faculty.extend(gen_dept_faculty('SMEC', [
         "Dr. Henry Ford", "Prof. Karl Benz", "Prof. Rudolf Diesel", "Dr. James Watt",
         "Prof. George Stephenson", "Dr. Isambard Brunel", "Prof. Nikolaus Otto", "Dr. Elijah McCoy",
         "Prof. Gottlieb Daimler", "Dr. Charles Kettering"
     ], ["Professor", "HOD", "Associate Professor", "Assistant Professor"]))
 
-    # SAS
     all_faculty.extend(gen_dept_faculty('SAS', [
         "Dr. Marie Curie", "Prof. Albert Einstein", "Dr. Isaac Newton", "Prof. Galileo Galilei",
         "Dr. Richard Feynman", "Prof. Stephen Hawking", "Dr. Neil deGrasse Tyson", "Prof. Rosalind Franklin",
         "Dr. Dmitri Mendeleev", "Prof. Louis Pasteur"
     ], ["Senior Professor", "Professor", "Associate Professor", "Assistant Professor"]))
 
-    # VSB
     all_faculty.extend(gen_dept_faculty('VSB', [
         "Dr. Peter Drucker", "Prof. Adam Smith", "Dr. Warren Buffett", "Prof. John Keynes",
         "Dr. Michael Porter", "Prof. Philip Kotler", "Dr. Jack Welch", "Prof. Henry Mintzberg",
         "Dr. Jim Collins", "Prof. Clayton Christensen"
     ], ["Professor", "Dean", "Associate Professor", "Assistant Professor"]))
 
-    # VSL
     all_faculty.extend(gen_dept_faculty('VSL', [
         "Dr. Ruth Bader Ginsburg", "Prof. Oliver Wendell Holmes", "Dr. Thurgood Marshall", "Prof. Sandra Day O'Connor",
         "Dr. William Blackstone", "Prof. Hugo Black", "Dr. Learned Hand", "Prof. Benjamin Cardozo",
         "Dr. John Marshall", "Prof. Antonin Scalia"
     ], ["Senior Advocate", "Professor", "Associate Professor", "HOD"]))
 
-    # VISH
     all_faculty.extend(gen_dept_faculty('VISH', [
         "Dr. Sigmund Freud", "Prof. Carl Jung", "Dr. B.F. Skinner", "Prof. Jean Piaget",
         "Dr. Noam Chomsky", "Prof. Jane Goodall", "Dr. Margaret Mead", "Prof. Sigmund Freud",
@@ -400,7 +387,6 @@ async def startup_event():
     async for user_doc in users_cursor:
         update_data = {}
         
-        # 1. Generate Unified ID if missing
         if not user_doc.get('anonymous_id'):
             new_id = str(random.randint(1000, 9999))
             update_data['anonymous_id'] = new_id
@@ -408,14 +394,12 @@ async def startup_event():
             update_data['anonymous_comment_id'] = new_id
             logging.info(f"Generated unified Anonymous ID {new_id} for user {user_doc.get('email')}")
         
-        # 2. If Unified ID exists but other fields are mismatched (legacy data), fix them
         elif user_doc.get('anonymous_chat_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_chat_id'] = user_doc.get('anonymous_id')
 
         elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
         
-        # 3. Ensure blocked field exists
         if 'blocked' not in user_doc:
             update_data['blocked'] = False
 
@@ -1078,20 +1062,16 @@ async def get_recommendations(current_user: User = Depends(get_current_user)):
         final_score = 0
         show_reason = False
         
-        # SCENARIO 1: ONLY AI INTERESTS
         if not user_rating_prefs and user_ai_interests:
             if match_found:
-                # Give a default score for relevance (e.g., 85)
-                final_score = 85 # Used for sorting only
+                final_score = 85
                 show_reason = True
         
-        # SCENARIO 2: ONLY RATING PREFERENCES (Ratings)
         elif user_rating_prefs and not user_ai_interests:
             if rating_count > 0:
                 final_score = normalized_rating_score
                 show_reason = True
         
-        # SCENARIO 3: BOTH INTERESTS AND RATINGS
         elif user_rating_prefs and user_ai_interests:
             if rating_count > 0:
                 final_score = normalized_rating_score
@@ -1178,7 +1158,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
             
             response_author = requests.get(url_author_search, params=params_author, headers=headers)
             
-            # Search through VIT-AP authors to find name match
             if response_author.status_code == 200 and response_author.json().get("results"):
                 data_author = response_author.json()
                 vit_authors = data_author["results"]
@@ -1239,8 +1218,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 skipped_count += 1
                 continue
 
-                        # ... inside sync_openalex_data loop ...
-
             url_works_final = "https://api.openalex.org/works"
             params_final = {
                 "filter": f"authorships.author.id:{target_author_id}", 
@@ -1268,11 +1245,8 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                         year_data = res.get("publication_year")
                         pub_year = str(year_data) if year_data else "Unknown"
                         pub_type = str(res.get("type", "") or "article")
-                        
-                        # --- NEW: Fetch Citation Count ---
                         citation_count = int(res.get("cited_by_count", 0))
                         
-                        # --- Simplified Logic for VIT-AP (Keep existing boolean logic even if inaccurate for now) ---
                         is_vitap_work = False 
                         authorships = res.get("authorships", [])
                         for authorship in authorships:
@@ -1286,7 +1260,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                                             break
                                 if is_vitap_work:
                                     break
-                        # -------------------------------------------------
 
                         clean_projects.append({
                             "openalex_id": openalex_id,
@@ -1294,7 +1267,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                             "publication_year": pub_year,
                             "type": pub_type,
                             "is_vitap": is_vitap_work,
-                            "cited_by_count": citation_count # NEW FIELD
+                            "cited_by_count": citation_count
                         })
             
             if clean_projects:
