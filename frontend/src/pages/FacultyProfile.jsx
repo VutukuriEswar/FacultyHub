@@ -1,13 +1,33 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, ArrowLeft, MessageSquare, Send, Reply, MapPin, Mail, Phone as PhoneIcon, BookOpen, ExternalLink, Trash } from 'lucide-react';
+import {
+  Star, ArrowLeft, MessageSquare, Send, Reply,
+  MapPin, Mail, Phone as PhoneIcon, BookOpen,
+  ExternalLink, Trash, Building2, Layers, TrendingUp
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
+
+// CHART IMPORTS
+import {
+  PieChart,
+  Pie,
+  Cell,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  BarChart,
+  Bar,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -18,6 +38,74 @@ const RATING_CATEGORIES = [
   { key: 'attendance', label: 'Attendance Leniency' },
   { key: 'doubt_clarification', label: 'Doubt Clarification' }
 ];
+
+// --- CHART COLORS ---
+const COLORS_TYPE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+// --- CUSTOM TOOLTIP ---
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    const value = payload[0].value;
+    const name = payload[0].name || payload[0].payload.name;
+    return (
+      <div className="bg-white/90 backdrop-blur-sm p-3 border border-gray-200 rounded-lg shadow-lg text-sm z-50">
+        <p className="font-semibold text-gray-700">{label}</p>
+        <p className="text-gray-600">
+          <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: payload[0].payload.fill || '#8b5cf6' }}></span>
+          {name}: <span className="font-bold">{value}</span>
+        </p>
+      </div>
+    );
+  }
+  return null;
+};
+
+// --- RADIAL PROGRESS CARD COMPONENT ---
+const RadialProgressCard = ({ label, value, total, color }) => {
+  const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
+  const radius = 18;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (percentage / 100) * circumference;
+
+  return (
+    <div
+      className="group flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 transition-colors duration-300 cursor-default border border-transparent hover:border-slate-100"
+    >
+      <div className="relative w-10 h-10 flex-shrink-0">
+        <svg className="w-full h-full transform -rotate-90" viewBox="0 0 50 50">
+          <circle
+            className="text-slate-100"
+            strokeWidth="6"
+            stroke="currentColor"
+            fill="transparent"
+            r={radius}
+            cx="25"
+            cy="25"
+          />
+          <circle
+            className="transition-all duration-1000 ease-out group-hover:opacity-80"
+            strokeWidth="6"
+            strokeLinecap="round"
+            stroke={color}
+            fill="transparent"
+            r={radius}
+            cx="25"
+            cy="25"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-slate-600">
+          {percentage}%
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider truncate">{label}</p>
+        <p className="text-sm font-bold text-slate-700">{value} Papers</p>
+      </div>
+    </div>
+  );
+};
 
 export default function FacultyProfile({ user }) {
   const { facultyId } = useParams();
@@ -31,6 +119,60 @@ export default function FacultyProfile({ user }) {
   const [loading, setLoading] = useState(true);
   const [tempRatings, setTempRatings] = useState({});
   const [showAllPublications, setShowAllPublications] = useState(false);
+
+  // --- CHART DATA PROCESSING ---
+  const chartData = useMemo(() => {
+    if (!faculty?.openalex_projects) return { typeData: [], citationsData: [], yearData: [], totalWorks: 0 };
+
+    const typeCounts = {};
+    const yearCounts = {};
+    const citationsByYear = {}; // Aggregate citations
+    let totalWorks = 0;
+    let totalCitations = 0;
+
+    faculty.openalex_projects.forEach(p => {
+      // Type Data
+      let type = p.type || 'Unknown';
+      type = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+      typeCounts[type] = (typeCounts[type] || 0) + 1;
+      totalWorks++;
+
+      // Year Data (Volume)
+      const year = p.publication_year || 'Unknown';
+      yearCounts[year] = (yearCounts[year] || 0) + 1;
+
+      // Citation Data (Impact)
+      const citations = p.cited_by_count || 0;
+      if (year !== 'Unknown') {
+        citationsByYear[year] = (citationsByYear[year] || 0) + citations;
+      }
+      totalCitations += citations;
+    });
+
+    const typeData = Object.keys(typeCounts)
+      .map((key, index) => ({
+        name: key,
+        value: typeCounts[key],
+        fill: COLORS_TYPE[index % COLORS_TYPE.length]
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    const yearData = Object.keys(yearCounts)
+      .sort()
+      .map(year => ({
+        year: year,
+        count: yearCounts[year]
+      }));
+
+    const citationsData = Object.keys(citationsByYear)
+      .sort()
+      .map(year => ({
+        year: year,
+        citations: citationsByYear[year]
+      }));
+
+    return { typeData, citationsData, yearData, totalWorks, totalCitations };
+  }, [faculty]);
 
   const loadData = useCallback(async () => {
     try {
@@ -213,11 +355,10 @@ export default function FacultyProfile({ user }) {
           Back
         </Button>
 
-        {/* Faculty Info */}
-        <Card className="mb-8" data-testid="faculty-profile-card">
+        <Card className="mb-8 animate-in fade-in slide-in-from-bottom-4 duration-500" data-testid="faculty-profile-card">
           <CardContent className="p-8">
             <div className="flex flex-col md:flex-row gap-8">
-              <Avatar className="w-32 h-32 border-2 border-border">
+              <Avatar className="w-32 h-32 border-2 border-border shadow-lg">
                 <AvatarImage
                   src={faculty.image_url}
                   alt={faculty.name}
@@ -235,18 +376,18 @@ export default function FacultyProfile({ user }) {
                 <div>
                   <h1 className="text-3xl font-bold mb-2" data-testid="faculty-name">{faculty.name}</h1>
                   <p className="text-lg text-muted-foreground mb-2">{faculty.designation}</p>
-                  <Badge className="mb-4">{faculty.department}</Badge>
+                  <Badge className="mb-4 shadow-sm">{faculty.department}</Badge>
                 </div>
 
                 <div className="flex flex-wrap gap-4">
                   {faculty.email && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
                       <Mail className="w-4 h-4" />
                       <span>{faculty.email}</span>
                     </div>
                   )}
                   {faculty.phone && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
                       <PhoneIcon className="w-4 h-4" />
                       <span>{faculty.phone}</span>
                     </div>
@@ -254,34 +395,36 @@ export default function FacultyProfile({ user }) {
                 </div>
 
                 {faculty.office_address && (
-                  <div className="flex items-start gap-2">
-                    <MapPin className="w-4 h-4 text-muted-foreground mt-1" />
+                  <div className="flex items-start gap-2 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                    <MapPin className="w-4 h-4 text-blue-600 mt-1" />
                     <div>
-                      <h3 className="font-semibold mb-1">Office Address</h3>
-                      <p className="text-sm text-muted-foreground">{faculty.office_address}</p>
+                      <h3 className="font-semibold mb-1 text-blue-900">Office Address</h3>
+                      <p className="text-sm text-blue-700">{faculty.office_address}</p>
                     </div>
                   </div>
                 )}
 
                 {faculty.research_interests && (
                   <div>
-                    <h3 className="font-semibold mb-1">Research Interests</h3>
-                    <p className="text-sm text-muted-foreground">{displayResearchInterests()}</p>
+                    <h3 className="font-semibold mb-1 text-slate-800">Research Interests</h3>
+                    <p className="text-sm text-slate-600">{displayResearchInterests()}</p>
                   </div>
                 )}
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
                 {RATING_CATEGORIES.map(cat => (
-                  <div key={cat.key} className="flex items-center gap-3">
-                    <span className="text-sm font-medium w-32">{cat.label}:</span>
-                    <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                    <span className="font-semibold" data-testid={`avg-${cat.key}`}>
-                      {faculty.avg_ratings[cat.key].toFixed(1)}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      ({faculty.rating_counts[cat.key]})
-                    </span>
+                  <div key={cat.key} className="flex items-center justify-between">
+                    <span className="text-sm font-medium w-32 text-slate-600">{cat.label}:</span>
+                    <div className="flex items-center gap-2">
+                      <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+                      <span className="font-bold text-slate-800" data-testid={`avg-${cat.key}`}>
+                        {faculty.avg_ratings[cat.key].toFixed(1)}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        ({faculty.rating_counts[cat.key]})
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -289,9 +432,95 @@ export default function FacultyProfile({ user }) {
 
             {faculty.openalex_projects && faculty.openalex_projects.length > 0 ? (
               <div className="mt-8 pt-6 border-t border-border">
-                <h3 className="text-xl font-semibold mb-6 flex items-center gap-2">
-                  <BookOpen className="w-5 h-5 text-primary" />
-                  Research Projects ({faculty.openalex_projects.length})
+                <h3 className="text-2xl font-bold mb-6 flex items-center gap-2 text-slate-800">
+                  <Layers className="w-6 h-6 text-primary" />
+                  Research Analytics
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+
+                  {/* 1. IMPACT (Area Chart) - REPLACING AFFILIATION SPLIT */}
+                  <Card className="shadow-md hover:shadow-xl transition-shadow duration-300">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                        Impact Over Time
+                        <TrendingUp className="w-3 h-3 text-purple-500" />
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold text-center mb-2 text-purple-700">
+                        {chartData.totalCitations}
+                      </div>
+                      <div className="text-xs text-center mb-4 text-muted-foreground">Total Citations</div>
+                      <ResponsiveContainer width="100%" height={140}>
+                        <AreaChart data={chartData.citationsData}>
+                          <defs>
+                            <linearGradient id="colorCitations" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.8} />
+                              <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <XAxis dataKey="year" style={{ fontSize: '10px' }} hide />
+                          <Tooltip content={<CustomTooltip />} />
+                          <Area
+                            type="monotone"
+                            dataKey="citations"
+                            stroke="#8b5cf6"
+                            fillOpacity={1}
+                            fill="url(#colorCitations)"
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+
+                  {/* 2. PUBLICATION TYPES (Radial Progress Cards) */}
+                  <Card className="shadow-md hover:shadow-xl transition-shadow duration-300">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium text-muted-foreground">Publication Types</CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-[240px] overflow-y-auto pt-2">
+                      <div className="space-y-2 pr-2">
+                        {chartData.typeData.slice(0, 10).map((item, index) => (
+                          <RadialProgressCard
+                            key={index}
+                            label={item.name}
+                            value={item.value}
+                            total={chartData.totalWorks}
+                            color={item.fill}
+                          />
+                        ))}
+                        {chartData.typeData.length === 0 && (
+                          <div className="text-xs text-muted-foreground text-center py-4">No data available</div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* 3. PRODUCTIVITY (Bar Chart) */}
+                  <Card className="shadow-md hover:shadow-xl transition-shadow duration-300">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-medium text-muted-foreground">Productivity</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={chartData.yearData}>
+                          <XAxis dataKey="year" style={{ fontSize: '10px' }} axisLine={false} tickLine={false} />
+                          <YAxis allowDecimals={false} style={{ fontSize: '10px' }} axisLine={false} tickLine={false} />
+                          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
+                          <Bar dataKey="count" fill="#14b8a6" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                      <div className="text-center text-xs text-muted-foreground mt-2">
+                        Publications per Year
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                </div>
+
+                <h3 className="text-xl font-semibold mb-4 flex items-center gap-2 text-slate-800">
+                  All Publications ({faculty.openalex_projects.length})
                 </h3>
                 <div className="space-y-3">
                   {(showAllPublications
@@ -300,19 +529,33 @@ export default function FacultyProfile({ user }) {
                   ).map((project, idx) => (
                     <div
                       key={idx}
-                      className="group p-4 bg-white border border-border rounded-lg shadow-sm hover:shadow-md transition-all duration-300 hover:border-primary/50"
+                      className={`group p-4 border rounded-xl shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 ${project.is_vitap
+                        ? 'bg-teal-50/50 border-teal-100 hover:border-teal-400'
+                        : 'bg-white border-gray-200 hover:border-gray-400'
+                        }`}
                     >
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div className="flex flex-col md:flex-row md:items-start justify-between gap-3">
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <Badge variant="secondary" className="text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 bg-slate-100 text-slate-600">
-                              {project.type || "Article"}
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <Badge
+                              variant="secondary"
+                              className={`text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 ${project.is_vitap ? 'bg-teal-100 text-teal-800' : 'bg-slate-100 text-slate-700'
+                                }`}
+                            >
+                              {project.type ? (project.type.charAt(0).toUpperCase() + project.type.slice(1).toLowerCase()) : "Article"}
                             </Badge>
-                            <span className="text-xs text-muted-foreground font-mono">
+
+                            <span className="text-xs text-muted-foreground font-mono bg-white px-1 rounded border border-gray-100">
                               {project.publication_year || "Unknown"}
                             </span>
+                            {project.cited_by_count !== undefined && (
+                              <span className="text-xs text-purple-600 font-bold bg-purple-50 px-1 rounded border border-purple-100 flex items-center gap-1">
+                                <TrendingUp className="w-2 h-2" />
+                                {project.cited_by_count} Citations
+                              </span>
+                            )}
                           </div>
-                          <h4 className="font-semibold text-slate-800 leading-snug">
+                          <h4 className="font-semibold text-slate-800 leading-snug group-hover:text-primary transition-colors">
                             {project.title || "Untitled Project"}
                           </h4>
                         </div>
@@ -326,7 +569,7 @@ export default function FacultyProfile({ user }) {
                     <Button
                       variant="outline"
                       onClick={() => setShowAllPublications(!showAllPublications)}
-                      className="px-6 py-2 font-medium"
+                      className="px-6 py-2 font-medium shadow-sm hover:shadow-md transition-all"
                       data-testid="toggle-publications-button"
                     >
                       {showAllPublications
@@ -340,14 +583,14 @@ export default function FacultyProfile({ user }) {
             ) : (
               <div className="mt-8 pt-6 border-t border-border">
                 <p className="text-sm text-muted-foreground italic">
-                  No OpenAlex projects synced for this faculty member in the VIT-AP Intitution yet.
+                  No OpenAlex projects synced for this faculty member yet.
                 </p>
               </div>
             )}
 
             {renderDetailsList(faculty).length > 0 && (
               <div className="mt-8 pt-6 border-t border-border">
-                <h3 className="text-xl font-semibold mb-4">Additional Details</h3>
+                <h3 className="text-xl font-semibold mb-4 text-slate-800">Additional Details</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-y-2 gap-x-4">
                   {renderDetailsList(faculty)}
                 </div>
@@ -356,7 +599,7 @@ export default function FacultyProfile({ user }) {
           </CardContent>
         </Card>
 
-        <Card className="mb-8" data-testid="rating-section">
+        <Card className="mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100" data-testid="rating-section">
           <CardHeader>
             <CardTitle>Rate This Professor</CardTitle>
           </CardHeader>
@@ -375,7 +618,7 @@ export default function FacultyProfile({ user }) {
             ))}
             <Button
               onClick={handleRatingSubmit}
-              className="w-full"
+              className="w-full shadow-md hover:shadow-lg transition-all"
               data-testid="submit-rating-button"
               disabled={!user}
             >
@@ -384,7 +627,7 @@ export default function FacultyProfile({ user }) {
           </CardContent>
         </Card>
 
-        <Card data-testid="comments-section">
+        <Card className="animate-in fade-in slide-in-from-bottom-4 duration-700 delay-200" data-testid="comments-section">
           <CardHeader>
             <CardTitle>Student Reviews</CardTitle>
           </CardHeader>
@@ -407,6 +650,7 @@ export default function FacultyProfile({ user }) {
                 disabled={!myRating && user}
                 readOnly={!user}
                 data-testid="comment-input"
+                className="focus:ring-2 ring-primary/20"
               />
               <Button
                 onClick={handleCommentSubmit}
@@ -442,7 +686,6 @@ export default function FacultyProfile({ user }) {
                             {new Date(comment.created_at).toLocaleDateString()}
                           </span>
                         </div>
-                        {/* Delete Button for Admin/Owner */}
                         {(comment.user_id === user?.user_id || user?.is_admin) && (
                           <Button
                             variant="ghost"
@@ -504,7 +747,6 @@ export default function FacultyProfile({ user }) {
                                 {new Date(reply.created_at).toLocaleDateString()}
                               </span>
                             </div>
-                            {/* Delete Button for Admin/Owner (Reply) */}
                             {(reply.user_id === user?.user_id || user?.is_admin) && (
                               <Button
                                 variant="ghost"

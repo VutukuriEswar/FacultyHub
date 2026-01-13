@@ -1239,17 +1239,16 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 skipped_count += 1
                 continue
 
+                        # ... inside sync_openalex_data loop ...
+
             url_works_final = "https://api.openalex.org/works"
             params_final = {
-                #"filter": f"authorships.author.id:{target_author_id}",  #All Works
-                "filter": f"authorships.author.id:{target_author_id},authorships.institutions.lineage:{VIT_INSTITUTION_LINEAGE}",   #VIT-AP Works
+                "filter": f"authorships.author.id:{target_author_id}", 
                 "per_page": 200,
                 "sort": "publication_year:desc",
                 "mailto": "admin@vitapstudent.ac.in"
             }
 
-            logging.info(f"Fetching VIT-AP publications for {raw_name} (ID: {target_author_id})...")
-            
             response_works = requests.get(url_works_final, params=params_final, headers=headers)
 
             if response_works.status_code != 200:
@@ -1269,11 +1268,33 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                         year_data = res.get("publication_year")
                         pub_year = str(year_data) if year_data else "Unknown"
                         pub_type = str(res.get("type", "") or "article")
+                        
+                        # --- NEW: Fetch Citation Count ---
+                        citation_count = int(res.get("cited_by_count", 0))
+                        
+                        # --- Simplified Logic for VIT-AP (Keep existing boolean logic even if inaccurate for now) ---
+                        is_vitap_work = False 
+                        authorships = res.get("authorships", [])
+                        for authorship in authorships:
+                            if authorship.get("author", {}).get("id", "") == target_author_id:
+                                institutions = authorship.get("institutions", [])
+                                for inst in institutions:
+                                    lineages = inst.get("lineage", [])
+                                    for lineage_item in lineages:
+                                        if VIT_INSTITUTION_LINEAGE in str(lineage_item):
+                                            is_vitap_work = True
+                                            break
+                                if is_vitap_work:
+                                    break
+                        # -------------------------------------------------
+
                         clean_projects.append({
                             "openalex_id": openalex_id,
                             "title": title,
                             "publication_year": pub_year,
-                            "type": pub_type
+                            "type": pub_type,
+                            "is_vitap": is_vitap_work,
+                            "cited_by_count": citation_count # NEW FIELD
                         })
             
             if clean_projects:
