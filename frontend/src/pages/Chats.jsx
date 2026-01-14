@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { io } from "socket.io-client";
-import { ArrowLeft, Send, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Send, MessageSquare, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import { useTheme } from '@/App';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -40,6 +42,7 @@ const formatMessageDate = (dateString) => {
 export default function Chats({ user }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { theme } = useTheme();
   const [chats, setChats] = useState([]);
   const [selectedChat, setSelectedChat] = useState(null);
   const [newMessage, setNewMessage] = useState(location.state?.initialMessage || '');
@@ -186,16 +189,21 @@ export default function Chats({ user }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
+    <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
       <div className="container mx-auto px-6 py-8 max-w-6xl">
-        <Button variant="ghost" onClick={() => navigate('/dashboard')} className="mb-6" data-testid="back-button">
+        <Button
+          variant="ghost"
+          onClick={() => navigate('/dashboard')}
+          className="mb-6 text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          data-testid="back-button"
+        >
           <ArrowLeft className="w-4 h-4 mr-2" />
           Back to Dashboard
         </Button>
 
-        <div className="flex items-center gap-3 mb-8">
-          <MessageSquare className="w-8 h-8 text-primary" />
-          <h1 className="text-4xl font-bold gradient-text" data-testid="chats-header">Messages</h1>
+        <div className="flex items-center justify-between mb-8">
+          <MessageSquare className="w-8 h-8 text-primary dark:text-teal-400" />
+          <h1 className="text-4xl font-bold gradient-text text-slate-900 dark:text-slate-100" data-testid="chats-header">Messages</h1>
         </div>
 
         {loading ? (
@@ -204,13 +212,13 @@ export default function Chats({ user }) {
           </div>
         ) : (
           <div className="grid md:grid-cols-3 gap-6 h-[600px]">
-            <Card className="md:col-span-1" data-testid="chat-list">
+            <Card className="md:col-span-1 bg-white dark:bg-slate-900 dark:border-slate-800" data-testid="chat-list">
               <CardHeader>
-                <CardTitle>Conversations</CardTitle>
+                <CardTitle className="text-slate-900 dark:text-slate-100">Conversations</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 overflow-y-auto h-[500px]">
                 {chats.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8" data-testid="no-chats-message">
+                  <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-8" data-testid="no-chats-message">
                     No conversations yet. Start chatting by clicking chat button on any comment.
                   </p>
                 ) : (
@@ -232,16 +240,21 @@ export default function Chats({ user }) {
                         data-testid={`chat-${chat.chat_id}`}
                       >
                         <div className="flex items-center gap-3">
-                          <Avatar>
-                            <AvatarFallback>
+                          <Avatar className="w-10 h-10">
+                            <AvatarFallback className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                               {otherParticipant?.anonymous_chat_id?.charAt(0) || '?'}
                             </AvatarFallback>
                           </Avatar>
                           <div className="flex-1 min-w-0">
-                            <p className={`font-semibold text-sm truncate ${otherParticipant?.anonymous_chat_id === 'Admin' ? 'admin-highlight' : ''}`}>
-                              {otherParticipant?.anonymous_chat_id || 'Unknown'}
-                            </p>
-                            <p className="text-xs text-muted-foreground truncate">
+                            <div className="flex items-center gap-1">
+                              <p className={`font-semibold text-sm truncate ${otherParticipant?.is_admin ? 'text-amber-600' : 'text-slate-900 dark:text-slate-100'}`}>
+                                {otherParticipant?.anonymous_chat_id || 'Unknown'}
+                              </p>
+                              {otherParticipant?.is_admin && (
+                                <ShieldCheck className="w-3 h-3 text-amber-600" />
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                               {lastMessage?.content || 'No messages'}
                             </p>
                           </div>
@@ -253,26 +266,32 @@ export default function Chats({ user }) {
               </CardContent>
             </Card>
 
-            <Card className="md:col-span-2" data-testid="chat-window">
+            <Card className="md:col-span-2 bg-white dark:bg-slate-900 dark:border-slate-800" data-testid="chat-window">
               {selectedChat || location.state?.recipientId ? (
                 <>
-                  <CardHeader className="border-b">
-                    <CardTitle>
-                      {selectedChat
-                        ? (
-                          <span className={getOtherParticipant(selectedChat)?.anonymous_chat_id === 'Admin' ? 'admin-highlight' : ''}>
-                            {getOtherParticipant(selectedChat)?.anonymous_chat_id || 'Chat'}
-                          </span>
-                        )
-                        : 'New Chat'
-                      }
+                  <CardHeader className="border-b border-border dark:border-slate-700">
+                    <CardTitle className="text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                      <div>
+                        {selectedChat
+                          ? (
+                            <div className="flex items-center gap-1">
+                              {getOtherParticipant(selectedChat)?.anonymous_chat_id || 'Chat'}
+                              {getOtherParticipant(selectedChat)?.is_admin && (
+                                <ShieldCheck className="w-4 h-4 text-amber-600" title="Verified Administrator" />
+                              )}
+                            </div>
+                          )
+                          : 'New Chat'
+                        }
+                      </div>
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-0 flex flex-col h-[500px]">
                     <div className="flex-1 overflow-y-auto p-6 space-y-4" data-testid="messages-container">
                       {(selectedChat?.messages || []).map(msg => {
                         const isMe = msg.sender_id === user.user_id;
-                        const isAdminSender = msg.sender_anonymous_id === "Admin" && !isMe;
+                        const isAdminSender = msg.is_admin_sender && !isMe;
+
                         return (
                           <div
                             key={msg.message_id}
@@ -281,28 +300,33 @@ export default function Chats({ user }) {
                           >
                             <div
                               className={`max-w-[70%] rounded-2xl px-4 py-2 ${isAdminSender
-                                ? 'bg-gradient-to-r from-pink-500 to-red-500 text-white'
+                                ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white border border-amber-500'
                                 : isMe
-                                  ? 'bg-primary text-primary-foreground'
-                                  : 'bg-muted'
+                                  ? 'bg-primary text-primary-foreground dark:bg-indigo-600 dark:text-white'
+                                  : 'bg-muted dark:bg-slate-700 dark:text-slate-200'
                                 }`}
                             >
-                              <p className="text-sm">{msg.content}</p>
-                              <div className={`flex items-center justify-end gap-2 mt-1 ${isAdminSender ? 'text-white' : 'text-muted-foreground'}`}>
-                                <p className={`text-[10px] opacity-70 font-mono`}>
-                                  {isMe ? 'You' : (msg.sender_anonymous_id || 'Unknown')}
-                                </p>
-                                <p className={`text-xs opacity-70`}>
-                                  {formatMessageDate(msg.created_at)}
-                                </p>
+                              <p className="text-sm dark:text-slate-100">{msg.content}</p>
+                              <div className={`flex items-center justify-end gap-2 mt-1 ${isAdminSender ? 'text-white/80' : 'text-muted-foreground dark:text-slate-400'}`}>
+                                <div className="flex items-center gap-1">
+                                  <p className={`text-[10px] opacity-90 font-semibold ${isAdminSender ? 'text-amber-600' : ''}`}>
+                                    {isMe ? 'You' : (msg.sender_anonymous_id || 'Unknown')}
+                                  </p>
+                                  {isAdminSender && (
+                                    <ShieldCheck className="w-3 h-3 text-white" title="Verified Administrator" />
+                                  )}
+                                </div>
                               </div>
+                              <p className={`text-xs opacity-70`}>
+                                {formatMessageDate(msg.created_at)}
+                              </p>
                             </div>
                           </div>
                         );
                       })}
                     </div>
 
-                    <div className="border-t p-4">
+                    <div className="border-t border-border dark:border-slate-700 p-4">
                       <div className="flex gap-2">
                         <Input
                           placeholder="Type a message..."
@@ -310,6 +334,7 @@ export default function Chats({ user }) {
                           onChange={(e) => setNewMessage(e.target.value)}
                           onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
                           data-testid="message-input"
+                          className="bg-slate-50 dark:bg-slate-950 dark:border-slate-700 dark:text-white dark:placeholder:text-slate-500"
                         />
                         <Button onClick={handleSendMessage} data-testid="send-button">
                           <Send className="w-4 h-4" />
@@ -320,13 +345,13 @@ export default function Chats({ user }) {
                 </>
               ) : (
                 <CardContent className="flex items-center justify-center h-[500px]">
-                  <p className="text-muted-foreground" data-testid="select-chat-message">Select a conversation to start chatting</p>
+                  <p className="text-muted-foreground dark:text-slate-400" data-testid="select-chat-message">Select a conversation to start chatting</p>
                 </CardContent>
               )}
             </Card>
           </div>
         )}
       </div>
-    </div>
+    </div >
   );
 }

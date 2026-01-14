@@ -6,18 +6,51 @@ import random
 import json
 import requests
 import pandas as pd
+import smtplib
+import asyncio
+import bcrypt
+import socketio
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Union
-from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-import bcrypt
 
-import socketio
-from fastapi.staticfiles import StaticFiles
+def send_smtp_email_sync(recipient: str, subject: str, body_html: str):
+    smtp_host = os.environ.get('SMTP_HOST')
+    smtp_port = int(os.environ.get('SMTP_PORT', 587))
+    smtp_user = os.environ.get('SMTP_USER')
+    smtp_pass = os.environ.get('SMTP_PASSWORD')
+
+    if not smtp_host or not smtp_user or not smtp_pass:
+        logging.error("SMTP credentials not configured. Email skipped.")
+        return
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = recipient
+
+        msg.attach(MIMEText(body_html, "html"))
+
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, recipient, msg.as_string())
+        logging.info(f"Email sent to {recipient}")
+    except Exception as e:
+        logging.error(f"Failed to send email: {e}")
+
+async def send_email_async(recipient: str, subject: str, body_html: str):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, send_smtp_email_sync, recipient, subject, body_html)
 
 def get_password_hash(password):
     pwd_bytes = password.encode('utf-8')
@@ -47,6 +80,23 @@ socket_app = socketio.ASGIApp(sio, app)
 api_router = APIRouter(prefix="/api")
 
 VIT_INSTITUTION_LINEAGE = "i4401726783"
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+ADMIN_ENV_EMAIL = os.environ.get('ADMIN_EMAIL')
+ADMIN_ENV_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+
+PROFANE_WORDS = {
+    "badword", "abuse", "hate", "stupid", "idiot", "damn", "crap", 
+    "scam", "fraud", "kill", "violent", "insult"
+}
+
+def contains_profanity(text: str) -> bool:
+    words = text.lower().split()
+    for word in words:
+        clean_word = ''.join(e for e in word if e.isalnum())
+        if clean_word in PROFANE_WORDS:
+            return True
+    return False
 
 class User(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -62,6 +112,7 @@ class User(BaseModel):
     anonymous_id: Optional[str] = None 
     anonymous_chat_id: Optional[str] = None
     anonymous_comment_id: Optional[str] = None
+    theme_preference: str = "light"
 
 class UserRegister(BaseModel):
     email: EmailStr
@@ -77,6 +128,7 @@ class UserUpdate(BaseModel):
     picture: Optional[str] = None
     preferences: Optional[List[str]] = None
     ai_interests: Optional[List[str]] = None
+    theme_preference: Optional[str] = None
 
 class UserAdminUpdate(BaseModel):
     is_admin: Optional[bool] = None
@@ -152,17 +204,26 @@ class CommentCreate(BaseModel):
     parent_comment_id: Optional[str] = None
 
 class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
     message_id: str
     sender_id: str
     sender_anonymous_id: str 
     content: str
     created_at: datetime
+    is_admin_sender: bool = False
+
+class ChatParticipant(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    user_id: str
+    anonymous_chat_id: str
+    is_admin: bool = False
 
 class Chat(BaseModel):
     model_config = ConfigDict(extra="allow")
     chat_id: str
-    participants: List[Dict[str, str]] 
+    participants: List[str]
     messages: List[ChatMessage]
+    unread_counts: Dict[str, int] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -193,28 +254,51 @@ def load_faculty_from_csv():
             return pd.Series([None] * len(df), index=df.index)
 
         names = get_col_val(['Name'])
-        departments = get_col_val(['Department'])
         designations = get_col_val(['Designation'])
         images = get_col_val(['Image', 'Image URL', 'Profile Picture'])
         research_ints = get_col_val(['Specialisation', 'Specialization', 'Research Interests', 'Research'])
-        office_addrs = get_col_val(['Office Address', 'Address', 'Office'])
+        office_addrs = get_col_val(['Office_Address', 'Address', 'Office'])
         emails = get_col_val(['Email', 'Email Address'])
         phones = get_col_val(['Phone', 'Mobile', 'Contact', 'Mobile Number'])
 
         KNOWN_DEPTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
+        DEPT_KEYWORDS = {
+            'SCOPE': ['SCOPE', 'Computer', 'Networking', 'Data Science', 'AI', 'Machine Learning', 'Software', 'Security'],
+            'SENSE': ['SENSE', 'Electronics', 'VLSI', 'Communication', 'Embedded', 'IoT'],
+            'SMEC': ['SMEC', 'Mechanical', 'Thermal', 'Automotive', 'Machines'],
+            'SAS': ['SAS', 'Physics', 'Mathematics', 'Chemistry', 'Science', 'Biology'],
+            'VSB': ['VSB', 'Business', 'Management', 'Finance', 'Marketing', 'HR'],
+            'VSL': ['VSL', 'Law', 'Legal', 'Constitution'],
+            'VISH': ['VISH', 'Social', 'Humanities', 'History', 'Geography', 'Economics']
+        }
 
         for index, row in df.iterrows():
             faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"    
             raw_name = names.iloc[index]
             name_val = "Unknown" if pd.isna(raw_name) or str(raw_name).strip() == "" else raw_name
-            raw_dept = departments.iloc[index]
-            dept_val = "Unknown" if pd.isna(raw_dept) else raw_dept
+            
+            raw_dept = designations.iloc[index]
+            raw_email = emails.iloc[index]
+            
+            dept_val = "Unknown"
+            
+            des_text = str(raw_dept).upper() if not pd.isna(raw_dept) else ""
+            for dept_name, keywords in DEPT_KEYWORDS.items():
+                if any(keyword in des_text for keyword in keywords):
+                    dept_val = dept_name
+                    break
+            
+            if dept_val == "Unknown" and not pd.isna(raw_email):
+                email_text = str(raw_email).upper()
+                if "SCOPE" in email_text: dept_val = "SCOPE"
+                elif "SENSE" in email_text: dept_val = "SENSE"
+                elif "SMEC" in email_text: dept_val = "SMEC"
+                elif "SAS" in email_text: dept_val = "SAS"
+                elif "VSB" in email_text: dept_val = "VSB"
+                elif "VSL" in email_text: dept_val = "VSL"
+                elif "VISH" in email_text: dept_val = "VISH"
+            
             raw_des = designations.iloc[index]
-            if dept_val == "Unknown" and not pd.isna(raw_des) and isinstance(raw_des, str):
-                for d in KNOWN_DEPTS:
-                    if d in raw_des:
-                        dept_val = d 
-                        break
             if not pd.isna(raw_des) and isinstance(raw_des, str):
                 parts = raw_des.split(',')
                 parts = [p.strip() for p in parts if p.strip() != str(dept_val) and p.strip() != '']
@@ -222,6 +306,7 @@ def load_faculty_from_csv():
                 if not cleaned_des: cleaned_des = raw_des
             else:
                 cleaned_des = "Unknown"
+            
             img_raw = images.iloc[index]
             if pd.isna(img_raw) or str(img_raw).strip() == "":
                 img_val = None
@@ -403,32 +488,37 @@ async def startup_event():
         if 'blocked' not in user_doc:
             update_data['blocked'] = False
 
+        if 'theme_preference' not in user_doc:
+            update_data['theme_preference'] = 'light'
+
         if update_data:
             await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
 
-    admin_email = "admin@vitapstudent.ac.in"
-    admin_pass = "Admin123"
-    admin_doc = await db.users.find_one({"email": admin_email})
-    if not admin_doc:
-        logging.info(f"Creating Admin user: {admin_email}")
-        unified_id = str(random.randint(1000, 9999))
-        await db.users.insert_one({
-            "user_id": f"user_admin_{uuid.uuid4().hex[:12]}",
-            "email": admin_email,
-            "name": "System Administrator",
-            "password_hash": get_password_hash(admin_pass),
-            "is_admin": True,
-            "blocked": False, 
-            "preferences": [],
-            "ai_interests": [],
-            "created_at": datetime.now(timezone.utc),
-            "anonymous_id": unified_id,
-            "anonymous_chat_id": unified_id,
-            "anonymous_comment_id": unified_id
-        })
+    admin_exists = await db.users.find_one({"is_admin": True})
+    
+    if not admin_exists:
+        if ADMIN_ENV_EMAIL and ADMIN_ENV_PASSWORD:
+            logging.info(f"Creating Admin user from .env: {ADMIN_ENV_EMAIL}")
+            unified_id = str(random.randint(1000, 9999))
+            await db.users.insert_one({
+                "user_id": f"user_admin_{uuid.uuid4().hex[:12]}",
+                "email": ADMIN_ENV_EMAIL,
+                "name": "System Administrator",
+                "password_hash": get_password_hash(ADMIN_ENV_PASSWORD),
+                "is_admin": True,
+                "blocked": False, 
+                "preferences": [],
+                "ai_interests": [],
+                "created_at": datetime.now(timezone.utc),
+                "anonymous_id": unified_id,
+                "anonymous_chat_id": unified_id,
+                "anonymous_comment_id": unified_id,
+                "theme_preference": "light"
+            })
+        else:
+            logging.warning("ADMIN_EMAIL and ADMIN_PASSWORD not found in .env. No admin created.")
     
     demo_email = "demo@vitapstudent.ac.in"
-    demo_pass = "Demo123"
     demo_doc = await db.users.find_one({"email": demo_email})
     if not demo_doc:
         logging.info(f"Creating Demo user: {demo_email}")
@@ -437,7 +527,7 @@ async def startup_event():
             "user_id": f"user_demo_{uuid.uuid4().hex[:12]}",
             "email": demo_email,
             "name": "Demo User",
-            "password_hash": get_password_hash(demo_pass),
+            "password_hash": get_password_hash("Demo123"),
             "is_admin": False,
             "blocked": False, 
             "preferences": [],
@@ -445,7 +535,8 @@ async def startup_event():
             "created_at": datetime.now(timezone.utc),
             "anonymous_id": unified_id,
             "anonymous_chat_id": unified_id,
-            "anonymous_comment_id": unified_id
+            "anonymous_comment_id": unified_id,
+            "theme_preference": "light"
         })
 
 async def get_current_user(request: Request, session_token: Optional[str] = Cookie(None)) -> User:
@@ -470,7 +561,7 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
         raise HTTPException(status_code=404, detail="User not found")
     
     if user_doc.get("blocked", False):
-        raise HTTPException(status_code=403, detail="Your account has been blocked by the administrator.")
+        raise HTTPException(status_code=403, detail="Your account has been blocked by administrator.")
     
     if isinstance(user_doc["created_at"], str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
@@ -502,7 +593,8 @@ async def register_user(user_data: UserRegister):
         "created_at": datetime.now(timezone.utc),
         "anonymous_id": unified_id,
         "anonymous_chat_id": unified_id,
-        "anonymous_comment_id": unified_id
+        "anonymous_comment_id": unified_id,
+        "theme_preference": "light"
     }
     
     await db.users.insert_one(new_user)
@@ -588,7 +680,7 @@ async def get_all_users(current_user: User = Depends(get_current_user)):
     return users
 
 @api_router.patch("/admin/users/{target_user_id}")
-async def admin_update_user(target_user_id: str, update: UserAdminUpdate, current_user: User = Depends(get_current_user)):
+async def admin_update_user(target_user_id: str, update: UserAdminUpdate, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
@@ -602,6 +694,26 @@ async def admin_update_user(target_user_id: str, update: UserAdminUpdate, curren
     
     if "is_admin" in update_data and update_data["is_admin"] is False:
         raise HTTPException(status_code=400, detail="Revoking admin rights is not allowed.")
+
+    if "blocked" in update_data and update_data["blocked"] is True:
+        target_user = await db.users.find_one({"user_id": target_user_id})
+        if target_user:
+            subject = "Account Blocked - Faculty Hub"
+            body = f"""
+            <html>
+              <body>
+                <h2>Your account has been blocked.</h2>
+                <p>Dear {target_user.get('name', 'User')},</p>
+                <p>This is to inform you that your account on the Faculty Hub platform has been blocked by the administrator.</p>
+                <p><b>Reason:</b> Violation of community guidelines (inappropriate language/content).</p>
+                <p>If you believe this is a mistake, or if you wish to appeal this decision, please reply to this email explaining your situation.</p>
+                <p>Please ensure you do not use inappropriate language in the future.</p>
+                <br>
+                <p>Regards,<br>Faculty Hub Admin</p>
+              </body>
+            </html>
+            """
+            background_tasks.add_task(send_email_async, target_user['email'], subject, body)
         
     result = await db.users.update_one(
         {"user_id": target_user_id},
@@ -800,7 +912,7 @@ async def submit_rating(faculty_id: str, rating: RatingSubmit, current_user: Use
                 
                 total = current_avg * current_count
                 new_total = total + val
-                current_count += 1
+                current_count +=1
                 new_avg = new_total / current_count
                 
                 await db.faculty.update_one(
@@ -844,8 +956,23 @@ async def get_comments(faculty_id: str, current_user: User = Depends(get_current
         if isinstance(comment["created_at"], str):
             comment["created_at"] = datetime.fromisoformat(comment["created_at"])
         
-        if current_user.is_admin:
-            comment["anonymous_handle"] = comment["user_name"]
+        commenter_id = comment.get("user_id")
+        commenter_name = comment.get("user_name", "Unknown")
+        is_commenter_admin = False
+
+        if commenter_id == current_user.user_id:
+            if current_user.is_admin:
+                is_commenter_admin = True
+        else:
+            commenter = await db.users.find_one({"user_id": commenter_id}, {"_id": 0, "is_admin": 1})
+            if commenter and commenter.get("is_admin"):
+                is_commenter_admin = True
+
+        if is_commenter_admin:
+            comment["anonymous_handle"] = commenter_name
+            comment["is_admin_commenter"] = True
+        elif current_user.is_admin:
+            comment["anonymous_handle"] = commenter_name
     
     return comments
 
@@ -855,14 +982,42 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
     if not rating_doc:
         raise HTTPException(status_code=403, detail="You must rate this faculty before commenting.")
 
+    faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id})
+    
+    detected_profanity = False
+    if contains_profanity(comment.content):
+        detected_profanity = True
+        logging.warning(f"Profanity detected from user {current_user.email} on faculty {faculty_id}")
+        
+        admin_email = ADMIN_ENV_EMAIL if ADMIN_ENV_EMAIL else "admin@vitapstudent.ac.in"        
+        admin_link = f"{FRONTEND_URL}/admin/users" 
+        subject = f"⚠️ Profanity Alert: User {current_user.name}"
+        body = f"""
+        <html>
+          <body>
+            <h3>Profanity Detected in Comment</h3>
+            <p><b>Faculty:</b> {faculty_doc['name'] if faculty_doc else 'Unknown'}</p>
+            <p><b>User:</b> {current_user.name} ({current_user.email})</p>
+            <p><b>Offending Comment:</b> "{comment.content}"</p>
+            <hr>
+            <p>Please review this user. You can block them directly from the dashboard:</p>
+            <a href="{admin_link}" style="padding: 10px; background-color: #d9534f; color: white; text-decoration: none; border-radius: 5px;">View User & Block</a>
+          </body>
+        </html>
+        """
+        asyncio.create_task(send_email_async, admin_email, subject, body)
+
     comment_id = f"comment_{uuid.uuid4().hex[:12]}"    
-    anonymous_handle = f"Anonymous@{current_user.anonymous_id}"
+    is_commenter_admin = current_user.is_admin
+    anonymous_handle = current_user.name if is_commenter_admin else f"Anonymous@{current_user.anonymous_id}"
+    
     comment_doc = {
         "comment_id": comment_id,
         "faculty_id": faculty_id,
         "user_id": current_user.user_id,
         "user_name": current_user.name, 
         "anonymous_handle": anonymous_handle,
+        "is_admin_commenter": is_commenter_admin,
         "user_picture": current_user.picture,
         "content": comment.content,
         "parent_comment_id": comment.parent_comment_id,
@@ -871,7 +1026,7 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
     
     await db.comments.insert_one(comment_doc)
     
-    return {"message": "Comment created successfully", "comment_id": comment_id}
+    return {"message": "Comment created successfully", "comment_id": comment_id, "profanity_detected": detected_profanity}
 
 @api_router.delete("/comments/{comment_id}")
 async def delete_comment(comment_id: str, current_user: User = Depends(get_current_user)):
@@ -895,33 +1050,34 @@ async def get_chats(current_user: User = Depends(get_current_user)):
         participant_ids = chat.get("participants", [])
         resolved_participants = []
         
+        unread_counts = chat.get("unread_counts", {})
+        my_unread_count = unread_counts.get(current_user.user_id, 0)
+        chat["unread_count"] = my_unread_count
+        
         for pid in participant_ids:
             if pid == current_user.user_id:
-                resolved_participants.append({
-                    "user_id": pid,
-                    "anonymous_chat_id": "You"
-                })
+                resolved_participants.append(
+                    ChatParticipant(user_id=pid, anonymous_chat_id="You", is_admin=False)
+                )
             else:
                 other_user = await db.users.find_one({"user_id": pid}, {"_id": 0, "name": 1, "is_admin": 1, "anonymous_chat_id": 1})
                 if other_user:
                     if current_user.is_admin:
-                        handle = "Admin" if other_user.get("is_admin") else other_user.get("name", "Unknown")
+                        handle = other_user.get("name", "Unknown")
                     else:
                         if other_user.get("is_admin"):
-                            handle = "Admin"
+                            handle = other_user.get("name")
                         else:
                             handle = other_user.get("anonymous_chat_id", "Unknown")
                             handle = f"Anonymous@{handle}" if handle != "Admin" else "Admin"
                     
-                    resolved_participants.append({
-                        "user_id": pid,
-                        "anonymous_chat_id": handle
-                    })
+                    resolved_participants.append(
+                        ChatParticipant(user_id=pid, anonymous_chat_id=handle, is_admin=other_user.get("is_admin", False))
+                    )
                 else:
-                    resolved_participants.append({
-                        "user_id": pid,
-                        "anonymous_chat_id": "Unknown"
-                    })
+                    resolved_participants.append(
+                        ChatParticipant(user_id=pid, anonymous_chat_id="Unknown", is_admin=False)
+                    )
         
         chat["participants"] = resolved_participants
 
@@ -935,15 +1091,17 @@ async def get_chats(current_user: User = Depends(get_current_user)):
                 msg["created_at"] = datetime.fromisoformat(msg["created_at"])
             
             if msg["sender_id"] == current_user.user_id:
+                if not msg.get("is_admin_sender"):
+                    msg["is_admin_sender"] = current_user.is_admin
                 continue
 
             sender = await db.users.find_one({"user_id": msg["sender_id"]}, {"_id": 0, "name": 1, "is_admin": 1})
             if sender:
-                if current_user.is_admin:
+                if sender.get("is_admin"):
                     msg["sender_anonymous_id"] = sender.get("name")
-                else:
-                    if sender.get("is_admin"):
-                        msg["sender_anonymous_id"] = "Admin"
+                    msg["is_admin_sender"] = True
+                elif not msg.get("is_admin_sender"):
+                    msg["is_admin_sender"] = False
     
     return chats_list
 
@@ -956,21 +1114,27 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         {"_id": 0}
     )
     
-    display_name = "Admin" if current_user.is_admin else f"Anonymous@{current_user.anonymous_id}"    
+    is_admin_sender = current_user.is_admin
+    display_name = current_user.name if is_admin_sender else f"Anonymous@{current_user.anonymous_id}"
+    
     new_message = {
         "message_id": f"msg_{uuid.uuid4().hex[:12]}",
         "sender_id": current_user.user_id,
         "sender_anonymous_id": display_name,
+        "is_admin_sender": is_admin_sender,
         "content": message.content,
         "created_at": datetime.now(timezone.utc)
     }
     
     if chat_doc:
+        recipient_id = message.recipient_id
+        
         await db.chats.update_one(
             {"chat_id": chat_doc["chat_id"]},
             {
                 "$push": {"messages": new_message},
-                "$set": {"updated_at": datetime.now(timezone.utc)}
+                "$set": {"updated_at": datetime.now(timezone.utc)},
+                "$inc": {f"unread_counts.{recipient_id}": 1}
             }
         )
         chat_id = chat_doc["chat_id"]
@@ -981,7 +1145,8 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
             "participants": participants, 
             "messages": [new_message],
             "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc)
+            "updated_at": datetime.now(timezone.utc),
+            "unread_counts": {message.recipient_id: 1}
         })
     
     room = f"chat_{chat_id}"
@@ -992,6 +1157,33 @@ async def send_message(message: ChatMessageCreate, current_user: User = Depends(
         logging.error(f"Socket emit failed for room {room}: {e}")
     
     return {"chat_id": chat_id, "message": new_message}
+
+@api_router.get("/chats/unread-count")
+async def get_unread_count(current_user: User = Depends(get_current_user)):
+    chats_cursor = db.chats.find({"participants": current_user.user_id}, {"_id": 0, "unread_counts": 1})
+    chats_list = await chats_cursor.to_list(100)
+    
+    total_unread = 0
+    for chat in chats_list:
+        unread_counts = chat.get("unread_counts", {})
+        total_unread += unread_counts.get(current_user.user_id, 0)
+        
+    return {"total_unread": total_unread}
+
+@api_router.post("/chats/{chat_id}/read")
+async def mark_chat_read(chat_id: str, current_user: User = Depends(get_current_user)):
+    chat_doc = await db.chats.find_one({"chat_id": chat_id}, {"_id": 0})
+    if not chat_doc:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    if current_user.user_id not in chat_doc.get("participants", []):
+        raise HTTPException(status_code=403, detail="You are not a participant in this chat")
+        
+    await db.chats.update_one(
+        {"chat_id": chat_id},
+        {"$set": {f"unread_counts.{current_user.user_id}": 0}}
+    )
+    return {"message": "Marked as read"}
 
 @api_router.get("/recommendations")
 async def get_recommendations(current_user: User = Depends(get_current_user)):
@@ -1128,7 +1320,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
         
         if not clean_faculty_name:
             logging.error(f"Skipping faculty {faculty.get('name')}: Name became empty after cleaning")
-            skipped_count +=1
+            skipped_count += 1
             continue
             
         faculty_tokens = set(clean_name_string(clean_faculty_name).split())
@@ -1258,6 +1450,10 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                                         if VIT_INSTITUTION_LINEAGE in str(lineage_item):
                                             is_vitap_work = True
                                             break
+                                if is_vitap_work:
+                                    break
+                                if is_vitap_work:
+                                    break
                                 if is_vitap_work:
                                     break
 

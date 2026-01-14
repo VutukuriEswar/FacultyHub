@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
+import { useTheme } from '@/App';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -34,6 +35,7 @@ const CATEGORIES = [
 
 export default function Rankings({ user }) {
   const navigate = useNavigate();
+  const { theme } = useTheme();
   const [department, setDepartment] = useState('all');
   const [category, setCategory] = useState('overall');
   const [method, setMethod] = useState('weighted');
@@ -76,30 +78,35 @@ export default function Rankings({ user }) {
   });
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
+    <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
       <div className="container mx-auto px-6 py-8 max-w-6xl">
-        <Button variant="ghost" onClick={() => navigate('/dashboard')} className="mb-6" data-testid="back-button">
+        <Button
+          variant="ghost"
+          onClick={() => navigate('/dashboard')}
+          className="mb-6 text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+          data-testid="back-button"
+        >
           <ArrowLeft className="w-4 h-4 mr-2" />
           Back to Dashboard
         </Button>
 
         <div className="flex items-center gap-3 mb-8">
-          <TrendingUp className="w-8 h-8 text-primary" />
-          <h1 className="text-4xl font-bold gradient-text" data-testid="rankings-header">Faculty Rankings</h1>
+          <TrendingUp className="w-8 h-8 text-primary dark:text-teal-400" />
+          <h1 className="text-4xl font-bold gradient-text text-slate-900 dark:text-slate-100" data-testid="rankings-header">Faculty Rankings</h1>
         </div>
 
-        <Card className="mb-8" data-testid="filters-section">
+        <Card className="mb-8 bg-white dark:bg-slate-900 dark:border-slate-800" data-testid="filters-section">
           <CardContent className="p-6">
             <div className="grid md:grid-cols-3 gap-4">
               <div>
-                <label className="text-sm font-medium mb-2 block">Department</label>
+                <label className="text-sm font-medium mb-2 block text-slate-700 dark:text-slate-300">Department</label>
                 <Select value={department} onValueChange={setDepartment}>
-                  <SelectTrigger data-testid="department-select">
+                  <SelectTrigger data-testid="department-select" className="bg-white dark:bg-slate-950 dark:border-slate-700 dark:text-white">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-white dark:bg-slate-950 dark:border-slate-700">
                     {DEPARTMENTS.map(dept => (
-                      <SelectItem key={dept.value} value={dept.value}>
+                      <SelectItem key={dept.value} value={dept.value} className="dark:text-slate-100">
                         {dept.label}
                       </SelectItem>
                     ))}
@@ -108,14 +115,14 @@ export default function Rankings({ user }) {
               </div>
 
               <div>
-                <label className="text-sm font-medium mb-2 block">Category</label>
+                <label className="text-sm font-medium mb-2 block text-slate-700 dark:text-slate-300">Category</label>
                 <Select value={category} onValueChange={setCategory}>
-                  <SelectTrigger data-testid="category-select">
+                  <SelectTrigger data-testid="category-select" className="bg-white dark:bg-slate-950 dark:border-slate-700 dark:text-white">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-white dark:bg-slate-950 dark:border-slate-700">
                     {CATEGORIES.map(cat => (
-                      <SelectItem key={cat.value} value={cat.value}>
+                      <SelectItem key={cat.value} value={cat.value} className="dark:text-slate-100">
                         {cat.label}
                       </SelectItem>
                     ))}
@@ -124,30 +131,30 @@ export default function Rankings({ user }) {
               </div>
 
               <div>
-                <label className="text-sm font-medium mb-2 block">Ranking Method</label>
+                <label className="text-sm font-medium mb-2 block text-slate-700 dark:text-slate-300">Ranking Method</label>
                 <Tabs value={method} onValueChange={setMethod} className="w-full">
-                  <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="weighted" data-testid="weighted-tab">Weighted</TabsTrigger>
-                    <TabsTrigger value="average" data-testid="average-tab">Average</TabsTrigger>
+                  <TabsList className="grid w-full grid-cols-2 bg-slate-100 dark:bg-slate-800">
+                    <TabsTrigger value="weighted" data-testid="weighted-tab" className="dark:text-slate-200 dark:data-[state=active]:bg-slate-700">Weighted</TabsTrigger>
+                    <TabsTrigger value="average" data-testid="average-tab" className="dark:text-slate-200 dark:data-[state=active]:bg-slate-700">Average</TabsTrigger>
                   </TabsList>
                 </Tabs>
               </div>
             </div>
 
             <div className="mt-6 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <Input
                 type="text"
                 placeholder="Search by name or department..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
+                className="pl-9 dark:bg-slate-950 dark:border-slate-700 dark:text-white"
                 data-testid="rankings-search-input"
               />
             </div>
 
-            <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-              <p className="text-sm text-muted-foreground">
+            <div className="mt-4 p-3 bg-muted/50 dark:bg-slate-900/30 rounded-lg border border-slate-200 dark:border-slate-700">
+              <p className="text-sm text-slate-900 dark:text-slate-300">
                 <strong>Weighted:</strong> Bayesian average that prevents bias from limited ratings.
                 <br />
                 <strong>Average:</strong> Simple mean of all ratings.
@@ -161,8 +168,8 @@ export default function Rankings({ user }) {
             <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent"></div>
           </div>
         ) : filteredRankings.length === 0 ? (
-          <Card className="p-12">
-            <p className="text-center text-muted-foreground" data-testid="no-rankings-message">
+          <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
+            <p className="text-center text-slate-600 dark:text-slate-400" data-testid="no-rankings-message">
               {searchQuery ? 'No rankings found matching your search' : 'No rankings available'}
             </p>
           </Card>
@@ -171,8 +178,7 @@ export default function Rankings({ user }) {
             {filteredRankings.map((faculty, index) => (
               <Card
                 key={faculty.faculty_id}
-                className={`hover-lift cursor-pointer transition-all ${index === 0 ? 'border-2 border-primary' : ''
-                  }`}
+                className={`hover-lift cursor-pointer transition-all bg-white dark:bg-slate-900 dark:border-slate-700 ${index === 0 ? 'border-2 border-primary' : ''}`}
                 onClick={() => navigate(`/faculty/${faculty.faculty_id}`)}
                 data-testid={`rank-${faculty.rank}`}
               >
@@ -180,13 +186,13 @@ export default function Rankings({ user }) {
                   <div className="flex items-center gap-6">
                     <div className="text-center">
                       <div
-                        className={`text-3xl font-bold ${index === 0
-                          ? 'text-yellow-500'
+                        className={`text-3xl font-bold py-2 px-4 rounded-full w-12 h-12 flex items-center justify-center ${index === 0
+                          ? 'bg-yellow-500 text-white'
                           : index === 1
-                            ? 'text-gray-400'
+                            ? 'bg-gray-400 text-white'
                             : index === 2
-                              ? 'text-orange-600'
-                              : 'text-muted-foreground'
+                              ? 'bg-orange-600 text-white'
+                              : 'bg-slate-200 text-slate-500'
                           }`}
                       >
                         #{faculty.rank}
@@ -199,20 +205,20 @@ export default function Rankings({ user }) {
                     </Avatar>
 
                     <div className="flex-1">
-                      <h3 className="text-xl font-semibold mb-1">{faculty.name}</h3>
-                      <p className="text-sm text-muted-foreground mb-2">{faculty.designation}</p>
-                      <Badge variant="secondary">{faculty.department}</Badge>
+                      <h3 className="text-xl font-semibold text-slate-900 dark:text-slate-100 mb-1">{faculty.name}</h3>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{faculty.designation}</p>
+                      <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
                     </div>
+                  </div>
 
-                    <div className="text-right">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Star className="w-5 h-5 fill-yellow-400 text-yellow-400" />
-                        <span className="text-2xl font-bold">{faculty.score}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {faculty.rating_counts[category]} ratings
-                      </p>
+                  <div className="text-right">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Star className="w-5 h-5 fill-yellow-400 text-yellow-400" />
+                      <span className="text-2xl font-bold text-slate-900 dark:text-slate-100">{faculty.score}</span>
                     </div>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">
+                      {faculty.rating_counts[category]} ratings
+                    </p>
                   </div>
                 </CardContent>
               </Card>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users } from 'lucide-react';
+import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users, Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
+import { useTheme } from '@/App';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -36,6 +37,7 @@ const AI_OPTIONS = [
 
 function AdminView({ user }) {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
   const [allFaculty, setAllFaculty] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -73,12 +75,12 @@ function AdminView({ user }) {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
-      <header className="border-b border-border bg-white/80 backdrop-blur-md sticky top-0 z-50">
+    <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
+      <header className="border-b border-border bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
-              <h1 className="text-2xl font-bold gradient-text cursor-pointer" onClick={() => navigate('/dashboard')}>
+              <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-teal-600 to-orange-500 cursor-pointer" onClick={() => navigate('/dashboard')}>
                 VIT-AP Faculty Hub
               </h1>
 
@@ -86,7 +88,7 @@ function AdminView({ user }) {
                 <Button
                   variant="ghost"
                   onClick={() => navigate('/admin')}
-                  className="text-primary font-semibold hover:bg-primary/10"
+                  className="text-teal-600 dark:text-teal-400 font-semibold hover:bg-teal-50 dark:hover:bg-teal-950"
                   data-testid="nav-admin-button"
                 >
                   <Settings className="w-4 h-4 mr-2" />
@@ -95,7 +97,7 @@ function AdminView({ user }) {
                 <Button
                   variant="ghost"
                   onClick={() => navigate('/admin/users')}
-                  className="text-blue-600 font-semibold hover:bg-blue-50"
+                  className="text-blue-600 dark:text-blue-400 font-semibold hover:bg-blue-50 dark:hover:bg-blue-950"
                 >
                   <Users className="w-4 h-4 mr-2" />
                   Users
@@ -104,10 +106,40 @@ function AdminView({ user }) {
             </div>
 
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" onClick={() => navigate('/profile')} data-testid="nav-profile-button">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => toggleTheme(theme === 'light' ? 'dark' : 'light')}
+                className="text-slate-500 dark:text-slate-300"
+                data-testid="theme-toggle"
+              >
+                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-orange-400" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate('/chats')}
+                className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                data-testid="nav-chats-button"
+              >
+                <MessageSquare className="w-5 h-5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate('/profile')}
+                className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                data-testid="nav-profile-button"
+              >
                 <User className="w-5 h-5" />
               </Button>
-              <Button variant="ghost" size="icon" onClick={handleLogout} data-testid="logout-button">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleLogout}
+                className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                data-testid="logout-button"
+              >
                 <LogOut className="w-5 h-5" />
               </Button>
             </div>
@@ -118,10 +150,10 @@ function AdminView({ user }) {
       <div className="container mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
-            <LayoutDashboard className="w-8 h-8 text-primary" />
+            <LayoutDashboard className="w-8 h-8 text-teal-600 dark:text-teal-400" />
             <div>
-              <h1 className="text-3xl font-bold gradient-text">All Faculty Directory</h1>
-              <p className="text-muted-foreground">
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100">All Faculty Directory</h1>
+              <p className="text-slate-600 dark:text-slate-400">
                 View and manage all faculty records.
               </p>
             </div>
@@ -130,30 +162,30 @@ function AdminView({ user }) {
 
         <div className="mb-8">
           <div className="relative max-w-2xl mx-auto">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <Input
               type="text"
               placeholder="Search faculty by name or department..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-12 h-14 text-lg border-2"
+              className="pl-12 h-14 text-lg border-2 dark:bg-slate-900 dark:border-slate-700 dark:text-white"
               data-testid="admin-search-input"
             />
           </div>
         </div>
 
         <div>
-          <h2 className="text-2xl font-bold mb-4">
+          <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100">
             {searchQuery ? `Search Results (${filteredFaculty.length})` : `All Faculty (${allFaculty.length})`}
           </h2>
 
           {loading ? (
             <div className="flex justify-center py-20">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent"></div>
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-teal-600 border-t-transparent"></div>
             </div>
           ) : filteredFaculty.length === 0 ? (
-            <Card className="p-12">
-              <p className="text-center text-muted-foreground">
+            <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
+              <p className="text-center text-slate-600 dark:text-slate-400">
                 No faculty found matching your search.
               </p>
             </Card>
@@ -162,7 +194,7 @@ function AdminView({ user }) {
               {filteredFaculty.map(faculty => (
                 <Card
                   key={faculty.faculty_id}
-                  className="hover-lift cursor-pointer transition-all"
+                  className="hover-lift cursor-pointer transition-all bg-white dark:bg-slate-900 dark:border-slate-700"
                   onClick={() => navigate(`/faculty/${faculty.faculty_id}`)}
                   data-testid={`admin-faculty-card-${faculty.faculty_id}`}
                 >
@@ -173,21 +205,21 @@ function AdminView({ user }) {
                         <AvatarFallback>{faculty.name.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
-                        <h3 className="font-semibold text-lg mb-1">{faculty.name}</h3>
-                        <p className="text-sm text-muted-foreground mb-1">{faculty.designation}</p>
-                        <Badge variant="secondary" className="text-xs">{faculty.department}</Badge>
+                        <h3 className="font-semibold text-lg text-slate-900 dark:text-slate-100">{faculty.name}</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{faculty.designation}</p>
+                        <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
                       </div>
                     </div>
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Overall Rating</span>
+                        <span className="text-sm text-slate-500 dark:text-slate-400">Overall Rating</span>
                         <div className="flex items-center gap-1">
                           <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                          <span className="font-semibold">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
                             {faculty.avg_ratings.overall.toFixed(1)}
                           </span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs text-slate-400 dark:text-slate-500">
                             ({faculty.rating_counts.overall})
                           </span>
                         </div>
@@ -206,6 +238,7 @@ function AdminView({ user }) {
 
 function StudentDashboard({ user }) {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
   const [preferences, setPreferences] = useState(user?.preferences || []);
   const [aiInterests, setAiInterests] = useState(user?.ai_interests || []);
   const [recommendations, setRecommendations] = useState([]);
@@ -240,7 +273,8 @@ function StudentDashboard({ user }) {
     try {
       await axios.patch(`${API}/users/me`, {
         preferences: preferences,
-        ai_interests: aiInterests
+        ai_interests: aiInterests,
+        theme_preference: theme
       });
       toast.success('Preferences updated successfully');
       await loadData();
@@ -295,20 +329,30 @@ function StudentDashboard({ user }) {
   const showCompatibilityScore = showRatingRecommendations || showMixedRecommendations;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50">
-      <header className="border-b border-border bg-white/80 backdrop-blur-md sticky top-0 z-50">
+    <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
+      <header className="border-b border-border bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-8">
-              <h1 className="text-2xl font-bold gradient-text cursor-pointer" onClick={() => navigate('/dashboard')}>
+              <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-teal-600 to-orange-500 cursor-pointer" onClick={() => navigate('/dashboard')}>
                 VIT-AP Faculty Hub
               </h1>
 
               <nav className="hidden md:flex items-center gap-4">
-                <Button variant="ghost" onClick={() => navigate('/dashboard')} data-testid="nav-home-button">
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate('/dashboard')}
+                  className="text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  data-testid="nav-home-button"
+                >
                   Home
                 </Button>
-                <Button variant="ghost" onClick={() => navigate('/rankings')} data-testid="nav-rankings-button">
+                <Button
+                  variant="ghost"
+                  onClick={() => navigate('/rankings')}
+                  className="text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  data-testid="nav-rankings-button"
+                >
                   <TrendingUp className="w-4 h-4 mr-2" />
                   Rankings
                 </Button>
@@ -316,13 +360,40 @@ function StudentDashboard({ user }) {
             </div>
 
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" onClick={() => navigate('/chats')} data-testid="nav-chats-button">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => toggleTheme(theme === 'light' ? 'dark' : 'light')}
+                className="text-slate-500 dark:text-slate-300"
+                data-testid="theme-toggle"
+              >
+                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-orange-400" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate('/chats')}
+                className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                data-testid="nav-chats-button"
+              >
                 <MessageSquare className="w-5 h-5" />
               </Button>
-              <Button variant="ghost" size="icon" onClick={() => navigate('/profile')} data-testid="nav-profile-button">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate('/profile')}
+                className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                data-testid="nav-profile-button"
+              >
                 <User className="w-5 h-5" />
               </Button>
-              <Button variant="ghost" size="icon" onClick={handleLogout} data-testid="logout-button">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleLogout}
+                className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                data-testid="logout-button"
+              >
                 <LogOut className="w-5 h-5" />
               </Button>
             </div>
@@ -331,13 +402,13 @@ function StudentDashboard({ user }) {
       </header>
 
       <div className="container mx-auto px-6 py-8">
-        <Card className="mb-8 border-l-4 border-primary bg-primary/5" data-testid="ai-interests-section">
+        <Card className="mb-8 border-l-4 border-teal-600 dark:border-l-teal-500 bg-teal-50 dark:bg-slate-900 dark:border-slate-700" data-testid="ai-interests-section">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <BotIcon className="w-5 h-5 text-primary" />
+            <CardTitle className="flex items-center gap-2 text-slate-900 dark:text-slate-100">
+              <BotIcon className="w-5 h-5 text-teal-600 dark:text-teal-400" />
               AI & Research Interests
             </CardTitle>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-slate-600 dark:text-slate-400">
               Select your research topics to find professors working on specific projects (e.g., AI, Robotics, ML).
             </p>
           </CardHeader>
@@ -346,41 +417,41 @@ function StudentDashboard({ user }) {
               {AI_OPTIONS.map(option => (
                 <label
                   key={option.value}
-                  className="flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg border border-border hover:bg-muted/50 transition-colors bg-white shadow-sm"
+                  className="flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg border border-border hover:bg-muted/50 transition-colors bg-white dark:bg-slate-800 dark:border-slate-700 shadow-sm"
                   data-testid={`ai-interest-${option.value}`}
                 >
                   <Checkbox
                     checked={aiInterests.includes(option.value)}
                     onCheckedChange={() => handlePreferenceToggle(option.value, 'ai')}
                   />
-                  <span className="text-sm font-medium">{option.label}</span>
+                  <span className="text-sm font-medium text-slate-900 dark:text-slate-100">{option.label}</span>
                 </label>
               ))}
             </div>
-            <Button onClick={handleSavePreferences} className="w-full mt-4" data-testid="save-ai-preferences">
+            <Button onClick={handleSavePreferences} className="w-full mt-4 bg-teal-600 hover:bg-teal-700" data-testid="save-ai-preferences">
               Update Recommendations
             </Button>
           </CardContent>
         </Card>
 
-        <Card className="mb-8 hover-lift" data-testid="preferences-section">
+        <Card className="mb-8 hover-lift bg-white dark:bg-slate-900 dark:border-slate-800" data-testid="preferences-section">
           <CardHeader>
-            <CardTitle>What matters most to you?</CardTitle>
-            <p className="text-sm text-muted-foreground">Select your teaching preferences to get personalized recommendations</p>
+            <CardTitle className="text-slate-900 dark:text-slate-100">What matters most to you?</CardTitle>
+            <p className="text-sm text-slate-600 dark:text-slate-400">Select your teaching preferences to get personalized recommendations</p>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-4">
               {RATING_OPTIONS.map(option => (
                 <label
                   key={option.value}
-                  className="flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg border border-border hover:bg-muted/50 transition-colors"
+                  className="flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg border border-border hover:bg-muted/50 transition-colors bg-white dark:bg-slate-800 dark:border-slate-700"
                   data-testid={`preference-${option.value}`}
                 >
                   <Checkbox
                     checked={preferences.includes(option.value)}
                     onCheckedChange={() => handlePreferenceToggle(option.value, 'rating')}
                   />
-                  <span className="text-sm font-medium">{option.label}</span>
+                  <span className="text-sm font-medium text-slate-900 dark:text-slate-100">{option.label}</span>
                 </label>
               ))}
             </div>
@@ -389,13 +460,13 @@ function StudentDashboard({ user }) {
 
         <div className="mb-8">
           <div className="relative max-w-2xl mx-auto">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
             <Input
               type="text"
               placeholder="Search faculty by name or department..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-12 h-14 text-lg border-2"
+              className="pl-12 h-14 text-lg border-2 dark:bg-slate-900 dark:border-slate-700 dark:text-white"
               data-testid="search-input"
             />
           </div>
@@ -403,36 +474,36 @@ function StudentDashboard({ user }) {
 
         <div>
           {showSearch && (
-            <h2 className="text-2xl font-bold mb-4" data-testid="search-results-header">
+            <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="search-results-header">
               Search Results ({filteredFaculty.length})
             </h2>
           )}
 
           {showAiRecommendations && (
-            <h2 className="text-2xl font-bold mb-4 text-primary" data-testid="recommended-header">
+            <h2 className="text-2xl font-bold mb-4 text-teal-600 dark:text-teal-400" data-testid="recommended-header">
               AI/Project Recommendations
             </h2>
           )}
 
           {(showRatingRecommendations || showMixedRecommendations) && (
-            <h2 className="text-2xl font-bold mb-4" data-testid="recommended-header">
+            <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="recommended-header">
               Recommended For You
             </h2>
           )}
 
           {!showSearch && !showAiRecommendations && !showRatingRecommendations && !showMixedRecommendations && (
-            <h2 className="text-2xl font-bold mb-4" data-testid="all-faculty-header">
+            <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="all-faculty-header">
               All Faculty
             </h2>
           )}
 
           {loading ? (
             <div className="flex justify-center py-20">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent"></div>
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-teal-600 border-t-transparent"></div>
             </div>
           ) : displayFaculty.length === 0 ? (
-            <Card className="p-12">
-              <p className="text-center text-muted-foreground" data-testid="no-results-message">
+            <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
+              <p className="text-center text-slate-600 dark:text-slate-400" data-testid="no-results-message">
                 {searchQuery ? 'No faculty found matching your search' : 'No recommendations available. Try selecting some interests or preferences.'}
               </p>
             </Card>
@@ -441,7 +512,7 @@ function StudentDashboard({ user }) {
               {displayFaculty.map(faculty => (
                 <Card
                   key={faculty.faculty_id}
-                  className="hover-lift cursor-pointer transition-all relative"
+                  className="hover-lift cursor-pointer transition-all relative bg-white dark:bg-slate-900 dark:border-slate-700"
                   onClick={() => navigate(`/faculty/${faculty.faculty_id}`)}
                   data-testid={`faculty-card-${faculty.faculty_id}`}
                 >
@@ -452,16 +523,16 @@ function StudentDashboard({ user }) {
                         <AvatarFallback>{faculty.name.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
-                        <h3 className="font-semibold text-lg mb-1">{faculty.name}</h3>
-                        <p className="text-sm text-muted-foreground mb-1">{faculty.designation}</p>
-                        <Badge variant="secondary" className="text-xs">{faculty.department}</Badge>
+                        <h3 className="font-semibold text-lg text-slate-900 dark:text-slate-100">{faculty.name}</h3>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{faculty.designation}</p>
+                        <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
                       </div>
                     </div>
 
                     {showAiRecommendations && faculty.recommendation_reason && (
-                      <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-md text-xs">
-                        <p className="font-semibold text-blue-900 mb-1">Why you?</p>
-                        <p className="text-blue-800 leading-relaxed">
+                      <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md text-xs">
+                        <p className="font-semibold text-blue-900 dark:text-blue-200 mb-1">Why you?</p>
+                        <p className="text-blue-800 dark:text-blue-300 leading-relaxed">
                           {faculty.recommendation_reason}
                         </p>
                       </div>
@@ -469,23 +540,23 @@ function StudentDashboard({ user }) {
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">Overall Rating</span>
+                        <span className="text-sm text-slate-500 dark:text-slate-400">Overall Rating</span>
                         <div className="flex items-center gap-1">
                           <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                          <span className="font-semibold">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
                             {faculty.avg_ratings.overall.toFixed(1)}
                           </span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs text-slate-400 dark:text-slate-500">
                             ({faculty.rating_counts.overall})
                           </span>
                         </div>
                       </div>
 
                       {showCompatibilityScore && faculty.compatibility_percentage !== undefined && (
-                        <div className="mt-3 pt-3 border-t border-border">
+                        <div className="mt-3 pt-3 border-t border-border dark:border-slate-700">
                           <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-primary">Compatibility</span>
-                            <span className="text-lg font-bold text-primary">
+                            <span className="text-sm font-medium text-teal-600 dark:text-teal-400">Compatibility</span>
+                            <span className="text-lg font-bold text-teal-600 dark:text-teal-400">
                               {faculty.compatibility_percentage}%
                             </span>
                           </div>
