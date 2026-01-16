@@ -239,7 +239,7 @@ def load_faculty_from_csv():
         names = get_col_val(['Name'])
         designations = get_col_val(['Designation'])
         profile_urls = get_col_val(['Profile_URL', 'Profile Link', 'Link'])
-        images = get_col_val(['Image', 'Image URL', 'Profile Picture'])
+        images = get_col_val(['Image_URL', 'Image', 'Image URL', 'Profile Picture'])
         research_ints = get_col_val(['Specialisation', 'Specialization', 'Research Interests', 'Research'])
         office_addrs = get_col_val(['Office_Address', 'Address', 'Office'])
         emails = get_col_val(['Email', 'Email Address'])
@@ -357,7 +357,7 @@ def load_faculty_from_csv():
             skipped_cols = ['Name', 'Name of Faculty', 'Faculty Name', 
                             'Department', 'Dept', 'School Name', 'School Name',
                             'Designation', 'Title', 'Position', 'Role',
-                            'Image', 'Image URL', 'Profile Picture', 'Photo', 'Picture',
+                            'Image', 'Image URL', 'Profile Picture', 'Photo', 'Picture', 'Image_URL',
                             'Specialisation', 'Specialization', 'Research Interests', 'Research', 'Area of Specialization',
                             'Office Address', 'Office_Address', 'Address', 'Office', 'Location',
                             'Email', 'Email Address', 
