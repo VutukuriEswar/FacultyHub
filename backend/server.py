@@ -10,6 +10,7 @@ import smtplib
 import asyncio
 import bcrypt
 import socketio
+from better_profanity import profanity
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
@@ -84,19 +85,6 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
 ADMIN_ENV_EMAIL = os.environ.get('ADMIN_EMAIL')
 ADMIN_ENV_PASSWORD = os.environ.get('ADMIN_PASSWORD')
-
-PROFANE_WORDS = {
-    "badword", "abuse", "hate", "stupid", "idiot", "damn", "crap", 
-    "scam", "fraud", "kill", "violent", "insult"
-}
-
-def contains_profanity(text: str) -> bool:
-    words = text.lower().split()
-    for word in words:
-        clean_word = ''.join(e for e in word if e.isalnum())
-        if clean_word in PROFANE_WORDS:
-            return True
-    return False
 
 class User(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -237,11 +225,6 @@ def load_faculty_from_csv():
         return None
     try:
         df = pd.read_csv(file_path)
-        profile_cols = ['Profile_URL', 'Profile URL', 'Profile', 'Link']
-        for col in profile_cols:
-            if col in df.columns:
-                df = df.drop(columns=[col])
-            
         faculty_list = []
         
         def get_col_val(target_names):
@@ -255,13 +238,13 @@ def load_faculty_from_csv():
 
         names = get_col_val(['Name'])
         designations = get_col_val(['Designation'])
+        profile_urls = get_col_val(['Profile_URL', 'Profile Link', 'Link'])
         images = get_col_val(['Image', 'Image URL', 'Profile Picture'])
         research_ints = get_col_val(['Specialisation', 'Specialization', 'Research Interests', 'Research'])
         office_addrs = get_col_val(['Office_Address', 'Address', 'Office'])
         emails = get_col_val(['Email', 'Email Address'])
         phones = get_col_val(['Phone', 'Mobile', 'Contact', 'Mobile Number'])
 
-        KNOWN_DEPTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
         DEPT_KEYWORDS = {
             'SCOPE': ['SCOPE', 'Computer', 'Networking', 'Data Science', 'AI', 'Machine Learning', 'Software', 'Security'],
             'SENSE': ['SENSE', 'Electronics', 'VLSI', 'Communication', 'Embedded', 'IoT'],
@@ -273,21 +256,53 @@ def load_faculty_from_csv():
         }
 
         for index, row in df.iterrows():
-            faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"    
             raw_name = names.iloc[index]
-            name_val = "Unknown" if pd.isna(raw_name) or str(raw_name).strip() == "" else raw_name
-            
-            raw_dept = designations.iloc[index]
+            raw_des = designations.iloc[index]
+            raw_profile_url = profile_urls.iloc[index] if 'profile_urls' in locals() else None
             raw_email = emails.iloc[index]
             
+            prefixes_to_remove = [
+                "dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", 
+                "assistant professor", "associate professor", "dean", "hod"
+            ]
+            clean_faculty_name = raw_name
+            for prefix in prefixes_to_remove:
+                if clean_faculty_name.lower().startswith(prefix):
+                    clean_faculty_name = clean_faculty_name[len(prefix):].strip()
+            
+            if not clean_faculty_name:
+                logging.error(f"Skipping faculty {raw_name}: Name became empty")
+                continue
+
             dept_val = "Unknown"
             
-            des_text = str(raw_dept).upper() if not pd.isna(raw_dept) else ""
-            for dept_name, keywords in DEPT_KEYWORDS.items():
-                if any(keyword in des_text for keyword in keywords):
-                    dept_val = dept_name
-                    break
-            
+            if raw_profile_url and not pd.isna(raw_profile_url):
+                url_str = str(raw_profile_url).upper()
+                if "(SCOPE)" in url_str:
+                    dept_val = "SCOPE"
+                elif "(SENSE)" in url_str:
+                    dept_val = "SENSE"
+                elif "(SMEC)" in url_str:
+                    dept_val = "SMEC"
+                elif "(SAS)" in url_str:
+                    dept_val = "SAS"
+                elif "(VSB)" in url_str:
+                    dept_val = "VSB"
+                elif "(VSL)" in url_str:
+                    dept_val = "VSL"
+                elif "(VISH)" in url_str:
+                    dept_val = "VISH"
+
+            if dept_val == "Unknown" and not pd.isna(raw_des):
+                des_text = str(raw_des).upper()
+                tokens = des_text.replace(',', ' ').replace(';', ' ').split()
+                
+                valid_depts = ["SCOPE", "SENSE", "SMEC", "SAS", "VSB", "VSL", "VISH"]
+                for token in tokens:
+                    if token in valid_depts:
+                        dept_val = token
+                        break
+
             if dept_val == "Unknown" and not pd.isna(raw_email):
                 email_text = str(raw_email).upper()
                 if "SCOPE" in email_text: dept_val = "SCOPE"
@@ -297,36 +312,36 @@ def load_faculty_from_csv():
                 elif "VSB" in email_text: dept_val = "VSB"
                 elif "VSL" in email_text: dept_val = "VSL"
                 elif "VISH" in email_text: dept_val = "VISH"
-            
-            raw_des = designations.iloc[index]
-            if not pd.isna(raw_des) and isinstance(raw_des, str):
-                parts = raw_des.split(',')
-                parts = [p.strip() for p in parts if p.strip() != str(dept_val) and p.strip() != '']
-                cleaned_des = ", ".join(parts)
-                if not cleaned_des: cleaned_des = raw_des
+
+            if pd.notna(raw_des):
+                parts = str(raw_des).split(',')
+                parts = [p.strip() for p in parts if p.strip() != '']
+                cleaned_parts = []
+                for part in parts:
+                    if part not in ["SCOPE", "SENSE", "SMEC", "SAS", "VSB", "VSL", "VISH", "REGISTRAR", "VICE CHANCELLOR"]:
+                        cleaned_parts.append(part)
+                
+                cleaned_des = ", ".join(cleaned_parts) if cleaned_parts else raw_des
             else:
                 cleaned_des = "Unknown"
             
+            faculty_id = f"csv_{index}_{uuid.uuid4().hex[:8]}"            
             img_raw = images.iloc[index]
-            if pd.isna(img_raw) or str(img_raw).strip() == "":
-                img_val = None
-            else:
-                img_val = str(img_raw).strip()
-            
-            res_val = None if pd.isna(research_ints.iloc[index]) else research_ints.iloc[index]
+            img_val = None if pd.isna(img_raw) or str(img_raw).strip() == "" else str(img_raw).strip()
+            raw_res = research_ints.iloc[index]
             research_list = []
-            if res_val and pd.notna(res_val):
-                raw_res_str = str(res_val).strip()
+            if raw_res and pd.notna(raw_res):
+                raw_res_str = str(raw_res).strip()
                 if raw_res_str.upper() != "N/A":
                     research_list = [s.strip() for s in raw_res_str.split(',')]
-
+            
             addr_val = None if pd.isna(office_addrs.iloc[index]) else office_addrs.iloc[index]
             email_val = None if pd.isna(emails.iloc[index]) else emails.iloc[index]
             phone_val = None if pd.isna(phones.iloc[index]) else phones.iloc[index]
 
             faculty_data = {
                 "faculty_id": faculty_id,
-                "name": name_val,
+                "name": clean_faculty_name,
                 "department": dept_val,
                 "designation": cleaned_des,
                 "image_url": img_val,
@@ -983,9 +998,9 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
         raise HTTPException(status_code=403, detail="You must rate this faculty before commenting.")
 
     faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id})
-    
     detected_profanity = False
-    if contains_profanity(comment.content):
+    
+    if profanity.contains_profanity(comment.content):
         detected_profanity = True
         logging.warning(f"Profanity detected from user {current_user.email} on faculty {faculty_id}")
         
@@ -1005,7 +1020,7 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
           </body>
         </html>
         """
-        asyncio.create_task(send_email_async, admin_email, subject, body)
+        asyncio.create_task(send_email_async(admin_email, subject, body))
 
     comment_id = f"comment_{uuid.uuid4().hex[:12]}"    
     is_commenter_admin = current_user.is_admin

@@ -8,6 +8,7 @@ uvicorn
 pandas
 openpyxl
 requests
+better-profanity
 passlib[bcrypt]
 bcrypt==3.2.2
 python-socketio
