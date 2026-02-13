@@ -240,7 +240,9 @@ function StudentDashboard({ user }) {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const [preferences, setPreferences] = useState(user?.preferences || []);
-  const [aiInterests, setAiInterests] = useState(user?.ai_interests || []);
+  // Initialize with EMPTY array for independent Home Page search
+  const [aiInterests, setAiInterests] = useState([]);
+  const [customInterest, setCustomInterest] = useState('');
   const [recommendations, setRecommendations] = useState([]);
   const [allFaculty, setAllFaculty] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -251,12 +253,15 @@ function StudentDashboard({ user }) {
       setLoading(true);
       const facultyRes = await axios.get(`${API}/faculty`);
       setAllFaculty(facultyRes.data);
-      if (preferences.length > 0 || aiInterests.length > 0) {
-        const recsRes = await axios.get(`${API}/recommendations`);
-        setRecommendations(recsRes.data);
-      } else {
-        setRecommendations([]);
-      }
+      setAllFaculty(facultyRes.data);
+
+      // Default: Load nothing or only load if we have profile ratings?
+      // User wants home page interests to be separate. 
+      // Let's NOT load recommendation by default unless there are profile prefs?
+      // Or maybe just load "All Faculty" initially.
+      // If user clicks "Load Profile Recs", we fetch.
+
+      setRecommendations([]);
     } catch (error) {
       console.error('Error loading data:', error);
       toast.error('Failed to load data');
@@ -269,19 +274,51 @@ function StudentDashboard({ user }) {
     loadData();
   }, [loadData]);
 
-  const handleSavePreferences = async () => {
+
+
+  // Function to fetch recommendations based on CURRENT local state (independent of profile)
+  const fetchRecommendations = async (interestsToUse = aiInterests) => {
     try {
-      await axios.patch(`${API}/users/me`, {
-        preferences: preferences,
-        ai_interests: aiInterests,
-        theme_preference: theme
-      });
-      toast.success('Preferences updated successfully');
-      await loadData();
+      setLoading(true);
+      let url = `${API}/recommendations`;
+
+      // Pass interests as query param if they exist
+      if (interestsToUse.length > 0) {
+        const param = interestsToUse.join(",");
+        url += `?interests=${encodeURIComponent(param)}`;
+      }
+
+      const res = await axios.get(url);
+      setRecommendations(res.data);
     } catch (error) {
-      console.error('Error updating preferences:', error);
-      toast.error('Failed to update preferences');
+      console.error("Failed to fetch recs:", error);
+      toast.error("Failed to fetch recommendations");
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const loadProfileRecommendations = async () => {
+    // 1. Set local state to user's profile interests
+    const profileInterests = user?.ai_interests || [];
+    setAiInterests(profileInterests);
+
+    // 2. Fetch using those interests
+    if (profileInterests.length > 0) {
+      await fetchRecommendations(profileInterests);
+      toast.success("Loaded profile interests");
+    } else {
+      toast.info("No interests found in profile.");
+    }
+  };
+
+  // On Mount, we do NOT auto-fetch recommendations based on profile anymore
+  // We just show all faculty until user interacts.
+
+  const handleSavePreferences = async () => {
+    // Logic for "Update Recommendations" button on Home Page
+    // This now ONLY fetches, does NOT save to profile (as requested).
+    await fetchRecommendations();
   };
 
   const handlePreferenceToggle = (value, type) => {
@@ -298,6 +335,23 @@ function StudentDashboard({ user }) {
           : [...prev, value]
       );
     }
+  };
+
+  const addCustomInterest = () => {
+    if (!customInterest.trim()) return;
+    const interest = customInterest.trim();
+
+    if (!aiInterests.includes(interest)) {
+      setAiInterests([...aiInterests, interest]);
+      toast.success(`Added ${interest}`);
+      setCustomInterest('');
+    } else {
+      toast.error('Interest already added');
+    }
+  };
+
+  const removeInterest = (interest) => {
+    setAiInterests(prev => prev.filter(i => i !== interest));
   };
 
   const handleLogout = async () => {
@@ -326,7 +380,7 @@ function StudentDashboard({ user }) {
     : (showAiRecommendations || showRatingRecommendations || showMixedRecommendations)
       ? recommendations
       : allFaculty;
-  const showCompatibilityScore = showRatingRecommendations || showMixedRecommendations;
+  const showCompatibilityScore = showAiRecommendations || showRatingRecommendations || showMixedRecommendations;
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
@@ -428,9 +482,47 @@ function StudentDashboard({ user }) {
                 </label>
               ))}
             </div>
-            <Button onClick={handleSavePreferences} className="w-full mt-4 bg-teal-600 hover:bg-teal-700" data-testid="save-ai-preferences">
-              Update Recommendations
-            </Button>
+
+            <div className="mt-6">
+              <div className="flex gap-2">
+                <Input
+                  value={customInterest}
+                  onChange={(e) => setCustomInterest(e.target.value)}
+                  placeholder="Add custom interest (e.g. Quantum Computing)..."
+                  className="dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                  onKeyDown={(e) => e.key === 'Enter' && addCustomInterest()}
+                />
+                <Button onClick={addCustomInterest} variant="secondary">Add</Button>
+              </div>
+            </div>
+
+            {/* Display Selected Interests (including custom ones) */}
+            <div className="mt-4 mb-4">
+              <div className="flex flex-wrap gap-2">
+                {aiInterests.map((interest, idx) => (
+                  <Badge key={idx} variant="secondary" className="px-3 py-1 text-sm bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-100 flex items-center gap-2">
+                    {interest}
+                    <button
+                      onClick={() => removeInterest(interest)}
+                      className="hover:text-red-500 focus:outline-none"
+                    >
+                      x
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            </div>
+
+            {/* Buttons Row */}
+            <div className="flex gap-4 mt-2">
+              <Button onClick={handleSavePreferences} className="flex-1 bg-teal-600 hover:bg-teal-700" data-testid="get-recs-home">
+                Get Recommendations (On-Spot)
+              </Button>
+
+              <Button onClick={loadProfileRecommendations} variant="outline" className="flex-1 border-teal-600 text-teal-600 hover:bg-teal-50 dark:hover:bg-teal-900" data-testid="load-profile-recs">
+                Load Profile Recommendations
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

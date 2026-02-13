@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from fastapi import Query # Add Query import
+from recommendation_engine import FacultyRecommender # Import Recommender
 
 def send_smtp_email_sync(recipient: str, subject: str, body_html: str):
     smtp_host = os.environ.get('SMTP_HOST')
@@ -481,6 +483,22 @@ async def startup_event():
     else:
         logging.info(f"Database already contains {count} faculty records. Skipping import.")
 
+    # --- Initialize Vector Store ---
+    try:
+        recommender = FacultyRecommender.get_instance()
+        # Sync all faculty to vector store to ensure it's up to date
+        all_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+        
+        # Run sync in background ideladly, but for now we do it here to ensure readiness
+        # or just reliable async call
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, recommender.sync_all_faculty, all_faculty)
+        
+    except Exception as e:
+        logging.error(f"Failed to initialize Vector Store: {e}")
+    # -------------------------------
+
     logging.info("Checking for seeded users and unified anonymous IDs...")
     
     users_cursor = db.users.find({})
@@ -811,7 +829,14 @@ async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(ge
     
     if not created_doc:
         raise HTTPException(status_code=500, detail="Failed to retrieve created faculty")
-        
+    
+    # Update Vector Store
+    try:
+        recommender = FacultyRecommender.get_instance()
+        recommender.upsert_faculty(created_doc)
+    except Exception as e:
+        logging.error(f"Vector upsert failed: {e}")
+
     return Faculty(**created_doc)
 
 @api_router.patch("/faculty/{faculty_id}", response_model=Faculty)
@@ -843,6 +868,13 @@ async def update_faculty(faculty_id: str, update: FacultyUpdate, current_user: U
     if isinstance(faculty_doc["created_at"], str):
         faculty_doc["created_at"] = datetime.fromisoformat(faculty_doc["created_at"])
     
+    # Update Vector Store
+    try:
+        recommender = FacultyRecommender.get_instance()
+        recommender.upsert_faculty(faculty_doc)
+    except Exception as e:
+        logging.error(f"Vector upsert failed: {e}")
+
     return Faculty(**faculty_doc)
 
 @api_router.delete("/faculty/{faculty_id}")
@@ -1201,104 +1233,119 @@ async def mark_chat_read(chat_id: str, current_user: User = Depends(get_current_
     return {"message": "Marked as read"}
 
 @api_router.get("/recommendations")
-async def get_recommendations(current_user: User = Depends(get_current_user)):
+async def get_recommendations(
+    interests: str = Query(None), 
+    current_user: User = Depends(get_current_user)
+):
     if current_user.is_admin:
         return []
 
-    user_ai_interests = current_user.ai_interests or []
+    # Decouple: Use query param IF provided, else fallback to profile
+    # If query param is provided, we IGNORE profile rating prefs for the SCORE 
+    # (per user request: "without any relation to the profile").
+    # However, we might still want to return data. 
+    
+    target_interests = []
+    if interests:
+        target_interests = [i.strip() for i in interests.split(",") if i.strip()]
+    else:
+        target_interests = current_user.ai_interests or []
+
     user_rating_prefs = current_user.preferences or []
     
-    if not user_rating_prefs and not user_ai_interests:
+    # If using ad-hoc interests, we arguably shouldn't filter by profile ratings strictly,
+    # or at least the score should be pure.
+    # User said: "matching percentage should be related to only the semantic".
+    
+    if not user_rating_prefs and not target_interests:
         return []
 
+    recommender = FacultyRecommender.get_instance()
+    
+    # 1. Get Vector Matches (Semantic Search)
+    vector_matches = []
+    if target_interests:
+        query_text = ", ".join(target_interests)
+        # Increase top_k to ensure we get scores for everyone (or mostly everyone)
+        # Since user wants ALL faculty listed with percentages.
+        vector_matches = recommender.search_faculty(query_text, top_k=2000) 
+    
+    # Map vector results to a dict for easy lookup
+    vector_scores = {m["faculty_id"]: m for m in vector_matches}
+    candidate_ids = set(vector_scores.keys())
+
+    # 2. Get All Faculty (to calculate rating scores)
+    # Optimization: Only fetch candidates if we have interests, 
+    # BUT if user ONLY has rating prefs, we need everyone.
+    
     faculty_list = await get_all_faculty()
     
     recommendations = []
     
     for fac in faculty_list:
-        rating_compatibility = 0.0
+        fid = fac["faculty_id"]
+        
+        # --- Rating Score Calculation ---
+        rating_score = 0.0
         rating_count = 0
         
-        for pref in user_rating_prefs:
-            pref_key = pref.lower().replace(" ", "_")
-            if pref_key in fac['avg_ratings']:
-                rating = fac['avg_ratings'][pref_key]
-                if rating > 0:
-                    rating_compatibility += rating
-                    rating_count +=1
-
-        normalized_rating_score = 0
-        if rating_count > 0:
-            normalized_rating_score = (rating_compatibility / rating_count) * 20 
-        else:
-            if 'overall' in fac['avg_ratings'] and fac['avg_ratings']['overall'] > 0:
-                 normalized_rating_score = fac['avg_ratings']['overall'] * 20
-
-        match_found = False
+        if user_rating_prefs:
+            for pref in user_rating_prefs:
+                pref_key = pref.lower().replace(" ", "_")
+                val = fac['avg_ratings'].get(pref_key, 0)
+                if val > 0:
+                    rating_score += val
+                    rating_count += 1
+            
+            # Normalize to 0-100
+            if rating_count > 0:
+                rating_score = (rating_score / rating_count) * 20 
+            else:
+                # Fallback to overall if specific ratings missing
+                if fac['avg_ratings'].get('overall', 0) > 0:
+                    rating_score = fac['avg_ratings']['overall'] * 20
+        
+        # --- Vector Score Retrieval ---
+        vector_data = vector_scores.get(fid)
+        vector_score_pct = vector_data["similarity_pct"] if vector_data else 0.0
+        
+        # --- Final Weighted Score ---
+        final_score = 0
         reason = ""
         
-        if user_ai_interests:
-            search_text = ""
-            res_interests = fac.get('research_interests') or []
-            if isinstance(res_interests, list):
-                search_text += " ".join(res_interests) + " "
-            else:
-                search_text += str(res_interests) + " "
-            
-            projects = fac.get('openalex_projects') or []
-            for p in projects:
-                search_text += p.get('title', '') + " "
-            
-            search_text = search_text.lower()
-            
-            for interest in user_ai_interests:
-                interest_lower = interest.lower()
-                
-                if interest_lower in search_text:
-                    match_found = True
-                    reason = f"Matched '{interest}' in Research/Projects."
-                    
-                    for p in projects:
-                        if interest_lower in p.get('title', '').lower():
-                            reason = f"Matched '{interest}' in project: '{p.get('title', '')[:30]}...'"
-                            break
-                    if not match_found:
-                        reason = f"Matched '{interest}' in research interests."
-                    break
-
-        final_score = 0
-        show_reason = False
+        if target_interests:
+             # Pure Semantic Score as requested
+             final_score = vector_score_pct
+             if vector_data:
+                 department = vector_data.get('department') or "their research"
+                 reason = f"Matches your interests in {department}."
+             
+             # If we have ratings too, we can append to reason but NOT score
+             if user_rating_prefs and rating_score > 0 and not interests:
+                 # Only consider profile ratings if NOT doing an ad-hoc search? 
+                 # Or always? User said "without relation to profile". 
+                 # If 'interests' param is present, strictly ignore profile context for scoring.
+                 pass
+                 
+        elif user_rating_prefs and not target_interests:
+             final_score = rating_score
+             if final_score > 0:
+                 reason = "Highly rated in your preferred categories."
         
-        if not user_rating_prefs and user_ai_interests:
-            if match_found:
-                final_score = 85
-                show_reason = True
-        
-        elif user_rating_prefs and not user_ai_interests:
-            if rating_count > 0:
-                final_score = normalized_rating_score
-                show_reason = True
-        
-        elif user_rating_prefs and user_ai_interests:
-            if rating_count > 0:
-                final_score = normalized_rating_score
-                show_reason = True
-            elif match_found:
-                final_score = 85
-                show_reason = True
-
-        if show_reason:
+        if final_score > 0 or target_interests:
+            # Show everyone if searching, or if they have a rating score. 
+            # Actually user wants "matching percentage along with those who doesnt match".
+            # So we should append EVERYONE if we are in "recommendation mode".
             rec_data = {
                 **fac,
-                "recommendation_reason": reason
+                "recommendation_reason": reason,
+                "compatibility_percentage": round(final_score, 1)
             }
-            if user_rating_prefs:
-                rec_data["compatibility_percentage"] = round(final_score, 1)
-            
             recommendations.append(rec_data)
 
     recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)    
-    return recommendations[:10]
+    # Return ALL recommendations, not just top 10
+    return recommendations
 
 @api_router.post("/admin/sync-openalex")
 async def sync_openalex_data(current_user: User = Depends(get_current_user)):
@@ -1497,6 +1544,21 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
             failed_count += 1
 
     logging.info(f"OpenAlex Sync completed. Updated: {updated_count}, Skipped: {skipped_count}, Failed: {failed_count}")
+    
+    # Sync Vectors after update
+    try:
+        recommender = FacultyRecommender.get_instance()
+        # We should only update the modified ones ideally, but to be safe we can sync all or just the updated ones.
+        # For simplicity, let's sync all again to be sure (since updated_count might be small)
+        if updated_count > 0:
+           # Fetch fresh data
+           fresh_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+           import asyncio
+           loop = asyncio.get_event_loop()
+           await loop.run_in_executor(None, recommender.sync_all_faculty, fresh_faculty)
+    except Exception as e:
+        logging.error(f"Vector sync after OpenAlex failed: {e}")
+
     return {
         "message": "Sync completed",
         "total_processed": len(all_faculty_data),
