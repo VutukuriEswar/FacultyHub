@@ -144,6 +144,12 @@ yarn start
 3. Add to `.env` file as `OPENALEX_API_KEY`
 4. Used for syncing publications and projects
 
+## License
+
+This project is licensed under the **MIT License** — see the [LICENSE](./LICENSE) file for details.
+
+© 2026 Eswar Vutukuri, Kanneganti Lohitha, Mani Deepak, Trisanth Chinta
+
 ## Acknowledgments
 
 Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, and the Socket.IO community for real-time capabilities. We thank you from the bottom of our hearts for helping us complete this project.
