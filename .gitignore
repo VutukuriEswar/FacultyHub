@@ -32,6 +32,7 @@ yarn-error.log*
 .pnpm-debug.log*
 dump.rdb
 .log
+yarn.lock
 
 .DS_Store
 *.pem
@@ -63,3 +64,4 @@ agenthub/agents/youtube/db
 .cache/
 
 android-sdk/ 
+chroma_db/

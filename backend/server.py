@@ -1,27 +1,31 @@
 import os
 import logging
-from pathlib import Path
-import uuid
 import random
 import json
 import requests
-import pandas as pd
 import smtplib
 import asyncio
 import bcrypt
 import socketio
+from datetime import datetime, timezone, timedelta
+from typing import List, Optional, Dict, Any, Union
+from pathlib import Path
+import uuid
+
+import pandas as pd
+import numpy as np
 from better_profanity import profanity
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any, Union
-from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, Cookie, Response, Request, Depends, BackgroundTasks, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
+
+from recommendation_engine import FacultyRecommender
 
 def send_smtp_email_sync(recipient: str, subject: str, body_html: str):
     smtp_host = os.environ.get('SMTP_HOST')
@@ -38,7 +42,6 @@ def send_smtp_email_sync(recipient: str, subject: str, body_html: str):
         msg["Subject"] = subject
         msg["From"] = smtp_user
         msg["To"] = recipient
-
         msg.attach(MIMEText(body_html, "html"))
 
         with smtplib.SMTP(smtp_host, smtp_port) as server:
@@ -155,7 +158,7 @@ class FacultyUpdate(BaseModel):
     scholar_profile: Optional[str] = None
     publications: Optional[List[str]] = None
     research_interests: Optional[Union[str, List[str]]] = None
-    openalex_projects: Optional[List[Dict[str, Any]]] = None
+    openalex_projects: Optional[Dict[str, Any]] = None
 
 class Rating(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -244,16 +247,6 @@ def load_faculty_from_csv():
         office_addrs = get_col_val(['Office_Address', 'Address', 'Office'])
         emails = get_col_val(['Email', 'Email Address'])
         phones = get_col_val(['Phone', 'Mobile', 'Contact', 'Mobile Number'])
-
-        DEPT_KEYWORDS = {
-            'SCOPE': ['SCOPE', 'Computer', 'Networking', 'Data Science', 'AI', 'Machine Learning', 'Software', 'Security'],
-            'SENSE': ['SENSE', 'Electronics', 'VLSI', 'Communication', 'Embedded', 'IoT'],
-            'SMEC': ['SMEC', 'Mechanical', 'Thermal', 'Automotive', 'Machines'],
-            'SAS': ['SAS', 'Physics', 'Mathematics', 'Chemistry', 'Science', 'Biology'],
-            'VSB': ['VSB', 'Business', 'Management', 'Finance', 'Marketing', 'HR'],
-            'VSL': ['VSL', 'Law', 'Legal', 'Constitution'],
-            'VISH': ['VISH', 'Social', 'Humanities', 'History', 'Geography', 'Economics']
-        }
 
         for index, row in df.iterrows():
             raw_name = names.iloc[index]
@@ -480,6 +473,24 @@ async def startup_event():
             logging.info(f"Imported {len(demo_data)} demo faculty records.")
     else:
         logging.info(f"Database already contains {count} faculty records. Skipping import.")
+
+    logging.info("Initializing Vector Store...")
+    try:
+        loop = asyncio.get_event_loop()
+        
+        def init_recommender_sync():
+            return FacultyRecommender.get_instance()
+
+        recommender = await loop.run_in_executor(None, init_recommender_sync)
+        
+        all_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+        
+        logging.info("Syncing faculty to vector store...")
+        await loop.run_in_executor(None, recommender.sync_all_faculty, all_faculty)
+        logging.info("Vector Store sync finished.")
+        
+    except Exception as e:
+        logging.error(f"Failed to initialize Vector Store: {e}")
 
     logging.info("Checking for seeded users and unified anonymous IDs...")
     
@@ -811,7 +822,13 @@ async def create_faculty(faculty: FacultyCreate, current_user: User = Depends(ge
     
     if not created_doc:
         raise HTTPException(status_code=500, detail="Failed to retrieve created faculty")
-        
+    
+    try:
+        recommender = FacultyRecommender.get_instance()
+        recommender.upsert_faculty(created_doc)
+    except Exception as e:
+        logging.error(f"Vector upsert failed: {e}")
+
     return Faculty(**created_doc)
 
 @api_router.patch("/faculty/{faculty_id}", response_model=Faculty)
@@ -843,6 +860,12 @@ async def update_faculty(faculty_id: str, update: FacultyUpdate, current_user: U
     if isinstance(faculty_doc["created_at"], str):
         faculty_doc["created_at"] = datetime.fromisoformat(faculty_doc["created_at"])
     
+    try:
+        recommender = FacultyRecommender.get_instance()
+        recommender.upsert_faculty(faculty_doc)
+    except Exception as e:
+        logging.error(f"Vector upsert failed: {e}")
+
     return Faculty(**faculty_doc)
 
 @api_router.delete("/faculty/{faculty_id}")
@@ -1006,7 +1029,7 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
         
         admin_email = ADMIN_ENV_EMAIL if ADMIN_ENV_EMAIL else "admin@vitapstudent.ac.in"        
         admin_link = f"{FRONTEND_URL}/admin/users" 
-        subject = f"⚠️ Profanity Alert: User {current_user.name}"
+        subject = f"Profanity Alert: User {current_user.name}"
         body = f"""
         <html>
           <body>
@@ -1201,104 +1224,151 @@ async def mark_chat_read(chat_id: str, current_user: User = Depends(get_current_
     return {"message": "Marked as read"}
 
 @api_router.get("/recommendations")
-async def get_recommendations(current_user: User = Depends(get_current_user)):
+async def get_recommendations(
+    interests: str = Query(None),
+    preferences: str = Query(None),
+    current_user: User = Depends(get_current_user)
+):
     if current_user.is_admin:
         return []
 
-    user_ai_interests = current_user.ai_interests or []
-    user_rating_prefs = current_user.preferences or []
+    target_interests = []
+    if interests:
+        target_interests = [i.strip().lower() for i in interests.split(",") if i.strip()]
+
+    user_rating_prefs = []
+    if preferences:
+        user_rating_prefs = [p.strip() for p in preferences.split(",") if p.strip()]
     
-    if not user_rating_prefs and not user_ai_interests:
+    if not user_rating_prefs and not target_interests:
         return []
 
-    faculty_list = await get_all_faculty()
+    try:
+        recommender = FacultyRecommender.get_instance()
+    except Exception as e:
+        logging.error(f"Recommender not initialized: {e}")
+        return []
+
+    faculty_list = await db.faculty.find({}, {"_id": 0}).to_list(1000)
     
     recommendations = []
-    
-    for fac in faculty_list:
-        rating_compatibility = 0.0
-        rating_count = 0
-        
-        for pref in user_rating_prefs:
-            pref_key = pref.lower().replace(" ", "_")
-            if pref_key in fac['avg_ratings']:
-                rating = fac['avg_ratings'][pref_key]
-                if rating > 0:
-                    rating_compatibility += rating
-                    rating_count +=1
 
-        normalized_rating_score = 0
-        if rating_count > 0:
-            normalized_rating_score = (rating_compatibility / rating_count) * 20 
-        else:
-            if 'overall' in fac['avg_ratings'] and fac['avg_ratings']['overall'] > 0:
-                 normalized_rating_score = fac['avg_ratings']['overall'] * 20
+    if target_interests:
+        query_text = ", ".join(target_interests)
+        vector_matches = recommender.search_faculty(query_text, top_k=len(faculty_list))
+        match_map = {m["faculty_id"]: m for m in vector_matches}
 
-        match_found = False
-        reason = ""
-        
-        if user_ai_interests:
-            search_text = ""
-            res_interests = fac.get('research_interests') or []
-            if isinstance(res_interests, list):
-                search_text += " ".join(res_interests) + " "
+        for fac in faculty_list:
+            fid = fac["faculty_id"]
+            vector_data = match_map.get(fid)
+            
+            if not vector_data:
+                continue
+
+            base_score = vector_data["similarity_pct"]
+            
+            found_in_interests = []
+            found_in_projects = []
+            
+            faculty_interests_raw = fac.get("research_interests", [])
+            if isinstance(faculty_interests_raw, str):
+                faculty_interests_list = [faculty_interests_raw]
             else:
-                search_text += str(res_interests) + " "
+                faculty_interests_list = faculty_interests_raw
             
-            projects = fac.get('openalex_projects') or []
-            for p in projects:
-                search_text += p.get('title', '') + " "
+            for interest in target_interests:
+                if any(interest in fi.lower() for fi in faculty_interests_list):
+                    found_in_interests.append(interest.title())
             
-            search_text = search_text.lower()
+            projects = fac.get("openalex_projects", [])
+            for interest in target_interests:
+                for p in projects:
+                    title = p.get("title", "").lower()
+                    if interest in title:
+                        if interest.title() not in found_in_interests and interest.title() not in found_in_projects:
+                            found_in_projects.append(interest.title())
+                        break
             
-            for interest in user_ai_interests:
-                interest_lower = interest.lower()
-                
-                if interest_lower in search_text:
-                    match_found = True
-                    reason = f"Matched '{interest}' in Research/Projects."
-                    
-                    for p in projects:
-                        if interest_lower in p.get('title', '').lower():
-                            reason = f"Matched '{interest}' in project: '{p.get('title', '')[:30]}...'"
-                            break
-                    if not match_found:
-                        reason = f"Matched '{interest}' in research interests."
-                    break
-
-        final_score = 0
-        show_reason = False
-        
-        if not user_rating_prefs and user_ai_interests:
-            if match_found:
-                final_score = 85
-                show_reason = True
-        
-        elif user_rating_prefs and not user_ai_interests:
-            if rating_count > 0:
-                final_score = normalized_rating_score
-                show_reason = True
-        
-        elif user_rating_prefs and user_ai_interests:
-            if rating_count > 0:
-                final_score = normalized_rating_score
-                show_reason = True
-            elif match_found:
-                final_score = 85
-                show_reason = True
-
-        if show_reason:
-            rec_data = {
-                **fac,
-                "recommendation_reason": reason
-            }
+            keyword_boost = 0.0
+            matched_keywords = len(found_in_interests) + len(found_in_projects)
+            total_keywords = len(target_interests)
+            
+            if total_keywords > 0:
+                keyword_boost = (matched_keywords / total_keywords) * 15.0
+            
+            final_score = base_score + keyword_boost
+            
+            rating_boost = 0.0
             if user_rating_prefs:
-                rec_data["compatibility_percentage"] = round(final_score, 1)
+                rating_score = 0.0
+                count = 0
+                for pref in user_rating_prefs:
+                    val = fac['avg_ratings'].get(pref, 0)
+                    if val > 0:
+                        rating_score += val
+                        count += 1
+                if count > 0:
+                    avg_rating = rating_score / count
+                    rating_boost = (avg_rating / 5.0) * 10.0
             
-            recommendations.append(rec_data)
+            final_score = min(100, final_score + rating_boost)
+            
+            if final_score <= 0:
+                continue
 
-    recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)    
-    return recommendations[:10]
+            reason_parts = []
+            if found_in_interests:
+                reason_parts.append(f"Matches '{', '.join(found_in_interests)}' in Research Interests")
+            if found_in_projects:
+                reason_parts.append(f"Matches '{', '.join(found_in_projects)}' in Projects/Publications")
+            
+            final_reason = ". ".join(reason_parts)
+            
+            if not final_reason:
+                if faculty_interests_list:
+                    best_fac_term = faculty_interests_list[0]
+                    best_user_term = target_interests[0].title()
+                    final_reason = f"Uses related terminology: '{best_fac_term}' instead of '{best_user_term}'."
+                elif fac.get("department") and any(i in fac["department"].lower() for i in target_interests):
+                    final_reason = f"Belongs to the {fac.get('department')} department."
+                else:
+                    if final_score > 60:
+                        final_reason = "Strong semantic match with your interests."
+                    else:
+                        final_reason = "Relevant based on overall profile similarity."
+
+            recommendations.append({
+                **fac,
+                "compatibility_percentage": round(final_score, 1),
+                "recommendation_reason": final_reason
+            })
+    
+    elif user_rating_prefs:
+        for fac in faculty_list:
+            rating_score = 0.0
+            count = 0
+            for pref in user_rating_prefs:
+                val = fac['avg_ratings'].get(pref, 0)
+                if val > 0:
+                    rating_score += val
+                    count += 1
+            
+            final_score = 0
+            if count > 0:
+                avg_rating = rating_score / count
+                final_score = (avg_rating / 5.0) * 100
+            
+            if final_score <= 0:
+                continue
+
+            recommendations.append({
+                **fac,
+                "compatibility_percentage": round(final_score, 1),
+                "recommendation_reason": None
+            })
+    
+    recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)
+    return recommendations
 
 @api_router.post("/admin/sync-openalex")
 async def sync_openalex_data(current_user: User = Depends(get_current_user)):
@@ -1334,7 +1404,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 clean_faculty_name = clean_faculty_name[len(prefix):].strip()
         
         if not clean_faculty_name:
-            logging.error(f"Skipping faculty {faculty.get('name')}: Name became empty after cleaning")
+            logging.error(f"Skipping faculty {faculty.get('name')}: Name became empty")
             skipped_count += 1
             continue
             
@@ -1377,7 +1447,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
 
                     if faculty_tokens == author_tokens:
                         target_author_id = author_id
-                        logging.info(f"✓ Exact Match Found: '{raw_name}' <-> '{author_display}'")
+                        logging.info(f"Exact Match Found: '{raw_name}' <-> '{author_display}'")
                         found_match = True
                         break
                     
@@ -1385,7 +1455,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                         overlap = len(faculty_tokens & author_tokens)
                         if overlap >= min(len(faculty_tokens), len(author_tokens)):
                             target_author_id = author_id
-                            logging.info(f"✓ Subset Match Found: '{raw_name}' <-> '{author_display}'")
+                            logging.info(f"Subset Match Found: '{raw_name}' <-> '{author_display}'")
                             found_match = True
                             break
 
@@ -1404,12 +1474,12 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                         longest_author = max(author_tokens, key=len)
                         if longest_author in faculty_tokens:
                             target_author_id = author_id
-                            logging.info(f"✓ Initial Match Found: '{raw_name}' <-> '{author_display}'")
+                            logging.info(f"Initial Match Found: '{raw_name}' <-> '{author_display}'")
                             found_match = True
                             break
                 
                 if not found_match:
-                    logging.info(f"✗ Faculty '{raw_name}' NOT found in VIT-AP authors list.")
+                    logging.info(f"Faculty '{raw_name}' NOT found in VIT-AP authors list.")
                     skipped_count += 1
                     continue
             else:
@@ -1421,7 +1491,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                 continue
 
             if not target_author_id:
-                logging.info(f"✗ No author ID found for '{raw_name}' at VIT-AP. Skipping.")
+                logging.info(f"No author ID found for '{raw_name}' at VIT-AP. Skipping.")
                 skipped_count += 1
                 continue
 
@@ -1467,10 +1537,6 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                                             break
                                 if is_vitap_work:
                                     break
-                                if is_vitap_work:
-                                    break
-                                if is_vitap_work:
-                                    break
 
                         clean_projects.append({
                             "openalex_id": openalex_id,
@@ -1487,7 +1553,7 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
                     {"$set": {"openalex_projects": clean_projects}}
                 )
                 updated_count += 1
-                logging.info(f"✓ Updated {raw_name} with {len(clean_projects)} publications.")
+                logging.info(f"Updated {raw_name} with {len(clean_projects)} publications.")
             else:
                 logging.info(f"No VIT-AP publications found for {raw_name}")
                 skipped_count += 1
@@ -1497,6 +1563,16 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
             failed_count += 1
 
     logging.info(f"OpenAlex Sync completed. Updated: {updated_count}, Skipped: {skipped_count}, Failed: {failed_count}")
+    
+    try:
+        recommender = FacultyRecommender.get_instance()
+        if updated_count > 0:
+           fresh_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+           loop = asyncio.get_event_loop()
+           await loop.run_in_executor(None, recommender.sync_all_faculty, fresh_faculty)
+    except Exception as e:
+        logging.error(f"Vector sync after OpenAlex failed: {e}")
+
     return {
         "message": "Sync completed",
         "total_processed": len(all_faculty_data),

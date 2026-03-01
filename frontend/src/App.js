@@ -12,6 +12,7 @@ import Profile from '@/pages/Profile';
 import Chats from '@/pages/Chats';
 import UserManagement from '@/pages/UserManagement';
 import UserProfileView from '@/pages/UserProfileView';
+import Contact from '@/pages/Contact';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -107,6 +108,14 @@ function AppRouter() {
         element={
           <ProtectedRoute>
             {({ user }) => <Rankings user={user} />}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/contact"
+        element={
+          <ProtectedRoute>
+            {({ user }) => <Contact user={user} />}
           </ProtectedRoute>
         }
       />

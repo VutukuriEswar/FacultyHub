@@ -229,10 +229,12 @@ export default function Chats({ user }) {
                       ? messagesList[messagesList.length - 1]
                       : null;
 
+                    const unreadCount = chat.unread_count || 0;
+
                     return (
                       <div
                         key={chat.chat_id}
-                        className={`p-3 rounded-lg cursor-pointer transition-colors ${selectedChat?.chat_id === chat.chat_id
+                        className={`p-3 rounded-lg cursor-pointer transition-colors relative ${selectedChat?.chat_id === chat.chat_id
                           ? 'bg-primary/10 border border-primary'
                           : 'hover:bg-muted/50'
                           }`}
@@ -258,6 +260,11 @@ export default function Chats({ user }) {
                               {lastMessage?.content || 'No messages'}
                             </p>
                           </div>
+                          {unreadCount > 0 && (
+                            <span className="bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                              {unreadCount}
+                            </span>
+                          )}
                         </div>
                       </div>
                     );

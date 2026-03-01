@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { ArrowLeft, Upload, Save, Bot as BotIcon } from 'lucide-react';
@@ -39,14 +39,35 @@ const AI_OPTIONS = [
   { value: 'Blockchain', label: 'Blockchain' }
 ];
 
-export default function Profile({ user }) {
+export default function Profile({ user: initialUser }) {
   const navigate = useNavigate();
   const { theme } = useTheme();
-  const [name, setName] = useState(user?.name || '');
-  const [picture, setPicture] = useState(user?.picture || '');
-  const [preferences, setPreferences] = useState(user?.preferences || []);
-  const [aiInterests, setAiInterests] = useState(user?.ai_interests || []);
+
+  const [currentUser, setCurrentUser] = useState(initialUser);
+  const [name, setName] = useState(initialUser?.name || '');
+  const [picture, setPicture] = useState(initialUser?.picture || '');
+  const [preferences, setPreferences] = useState(initialUser?.preferences || []);
+  const [aiInterests, setAiInterests] = useState(initialUser?.ai_interests || []);
+  const [customInterest, setCustomInterest] = useState('');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        const res = await axios.get(`${API}/auth/me`);
+        setCurrentUser(res.data);
+        setName(res.data.name || '');
+        setPicture(res.data.picture || '');
+        setPreferences(res.data.preferences || []);
+        setAiInterests(res.data.ai_interests || []);
+      } catch (error) {
+        console.error("Failed to fetch user data", error);
+        toast.error("Could not refresh profile data.");
+      }
+    };
+
+    fetchUserData();
+  }, []);
 
   const handleSave = async () => {
     try {
@@ -59,6 +80,10 @@ export default function Profile({ user }) {
         theme_preference: theme
       });
       toast.success('Profile updated successfully');
+
+      const res = await axios.get(`${API}/auth/me`);
+      setCurrentUser(res.data);
+
     } catch (error) {
       console.error('Error updating profile:', error);
       toast.error('Failed to update profile');
@@ -83,7 +108,24 @@ export default function Profile({ user }) {
     }
   };
 
-  const isAdmin = user?.is_admin || false;
+  const addCustomInterest = () => {
+    if (!customInterest.trim()) return;
+    const interest = customInterest.trim();
+
+    if (!aiInterests.includes(interest)) {
+      setAiInterests([...aiInterests, interest]);
+      toast.success(`Added ${interest}`);
+      setCustomInterest('');
+    } else {
+      toast.error('Interest already added');
+    }
+  };
+
+  const removeInterest = (interest) => {
+    setAiInterests(prev => prev.filter(i => i !== interest));
+  };
+
+  const isAdmin = currentUser?.is_admin || false;
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
@@ -154,17 +196,17 @@ export default function Profile({ user }) {
               <div>
                 <Label>Email</Label>
                 <div className="mt-2 p-3 bg-muted dark:bg-slate-800 rounded-md text-muted-foreground dark:text-slate-300">
-                  {user?.email}
+                  {currentUser?.email}
                 </div>
               </div>
 
               <div>
                 <Label>Role</Label>
                 <div className="mt-2">
-                  {user?.is_admin && (
+                  {currentUser?.is_admin && (
                     <Badge variant="secondary" className="bg-primary text-primary-foreground text-sm" data-testid="admin-badge">Administrator</Badge>
                   )}
-                  {!user?.is_admin && (
+                  {!currentUser?.is_admin && (
                     <Badge variant="outline" className="text-slate-700 dark:text-slate-300 text-sm">Student</Badge>
                   )}
                 </div>
@@ -253,6 +295,41 @@ export default function Profile({ user }) {
                         </label>
                       ))}
                     </div>
+
+                    <div className="mt-6">
+                      <Label className="text-slate-700 dark:text-slate-300">Add Custom Interest</Label>
+                      <div className="flex gap-2 mt-2">
+                        <Input
+                          value={customInterest}
+                          onChange={(e) => setCustomInterest(e.target.value)}
+                          placeholder="e.g. Quantum Computing, Bioinformatics..."
+                          className="dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+                          onKeyDown={(e) => e.key === 'Enter' && addCustomInterest()}
+                        />
+                        <Button onClick={addCustomInterest} variant="secondary">Add</Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-6">
+                      <Label className="text-slate-700 dark:text-slate-300 mb-2 block">Your Selected Interests</Label>
+                      <div className="flex flex-wrap gap-2">
+                        {aiInterests.length === 0 && (
+                          <span className="text-sm text-slate-500 italic">No interests selected yet.</span>
+                        )}
+                        {aiInterests.map((interest, idx) => (
+                          <Badge key={idx} variant="secondary" className="px-3 py-1 text-sm bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-100 flex items-center gap-2">
+                            {interest}
+                            <button
+                              onClick={() => removeInterest(interest)}
+                              className="hover:text-red-500 focus:outline-none"
+                            >
+                              x
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-4">
                       Don't forget to click "Save Changes" to update your preferences.
                     </p>
