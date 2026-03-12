@@ -1,56 +1,62 @@
 ## What is VITAP Faculty Hub?
 
-VITAP Faculty Hub is a web application designed to bridge the gap between students and faculty at VIT-AP University. It transforms the faculty directory into an interactive platform where students can discover professors, analyze research interests, and provide constructive feedback, all while maintaining privacy and fostering community.
+VITAP Faculty Hub is a comprehensive web application designed to bridge the gap between students and faculty at VIT-AP University. It transforms the static faculty directory into an interactive platform where students can discover professors, analyze research interests, and provide constructive feedback. The system features automated data synchronization, intelligent recommendation reasoning, and robust privacy controls.
 
 ## Key Features
 
-👨‍🏫 **Comprehensive Faculty Discovery**
-- Browse the complete VIT-AP faculty database
-- Access detailed profiles including research interests and contact info
-- View OpenAlex integrated research projects and publications
+👨‍🏫 **Intelligent Faculty Discovery**
+- Browse the complete VIT-AP faculty database powered by automated Selenium scrapers.
+- Access detailed profiles including research interests, office addresses, and contact info.
+- **Enhanced OpenAlex Integration:** Advanced matching algorithms (tokenization & subset matching) accurately link faculty to their publications and verify VIT-AP affiliation.
 
 ⭐ **Interactive Rating System**
-- Rate faculty on Teaching, Attendance, and Doubt Clarification
-- View average ratings and overall score
-- Contribute to a transparent feedback loop
+- Rate faculty on Teaching, Attendance, Doubt Clarification, and Overall metrics.
+- View average ratings calculated using weighted Bayesian estimation to prevent rating skewing.
+- Contribute to a transparent, data-driven feedback loop.
 
-💬 **Anonymous Community & Moderation**
-- Engage in public discussions via faculty-specific comments
+💬 **Anonymous Community & Advanced Moderation**
+- Engage in discussions via faculty-specific comments.
 - **Privacy First:** Users appear as "Anonymous@ID" to other students.
-- **Admin Oversight:** Admins can view real names and moderate content.
-- **Content Management:** Users can delete their own comments; Admins can delete any comment.
+- **Automated Profanity Guard:** The system automatically detects inappropriate language in comments.
+- **Instant Alerts:** Administrators receive styled HTML email alerts with direct "Block User" links upon profanity detection.
+- **Professional Communication:** Blocked users receive a clear, formatted email explaining the violation and appeal process.
+
+🤖 **Explainable Smart Recommendations**
+- Get faculty recommendations based on research interests or rating preferences.
+- **Transparent Reasoning:** The engine provides specific reasons for suggestions (e.g., "Matches 'AI' in Research Interests" or "Uses related terminology: 'Machine Learning' instead of 'ML'").
+- Match keywords with verified OpenAlex data to find mentors in your field.
+
+🔄 **Automated Background Synchronization**
+- **Website Sync:** Scheduled Selenium jobs automatically scrape the official VIT-AP website for new faculty or profile updates every 3 hours.
+- **Research Sync:** OpenAlex data is refreshed every 2 hours to keep publication lists current.
+- **Vector Store Sync:** The recommendation engine automatically re-indexes faculty data whenever the database changes.
 
 💬 **Real-time Communication**
 - Connect directly with peers using real-time Socket.IO chat functionality.
-- **WhatsApp-Style UI:** Messages display timestamps dynamically (e.g., "10:30 AM", "Yesterday, 5:00 PM").
+- **WhatsApp-Style UI:** Messages display timestamps dynamically.
 - **Admin Visibility:** Messages from Admins are highlighted for easy identification.
 
-🤖 **Smart Recommendations**
-- Get faculty recommendations based on your research interests (AI, ML, Robotics, etc.).
-- Match keywords with OpenAlex data to find mentors in your field.
-- Prioritized scoring based on your rating preferences.
-
-🔐 **Admin & User Management**
-- **User Control:** Admins can view all user profiles, grant Admin rights, or Block/Unblock accounts.
-- **Data Sync:** Admin integration with OpenAlex API to auto-sync latest publications.
-- **Comment Moderation:** Admins can delete inappropriate comments instantly.
+🔐 **Robust Admin & User Management**
+- **Seeding:** Automatic creation of Admin and Demo accounts from environment variables on first startup.
+- **Data Consistency:** Automatic checks ensure all users have unified Anonymous IDs for chats and comments.
+- **User Control:** Admins can view profiles, grant rights, or block accounts.
 
 ## Tech Stack
 
 **Backend:**
-- FastAPI (Python web framework)
-- MongoDB with Motor for async database operations
-- Bcrypt for secure password hashing
-- Pandas for CSV data processing
-- OpenAlex API for research data synchronization
-- Python-Socket.IO for real-time WebSocket communication
+- **FastAPI** (Python web framework)
+- **MongoDB** with Motor for async database operations
+- **Selenium** & **WebDriver Manager** for automated website scraping
+- **APScheduler** for background cron jobs (syncing data)
+- **Better-Profanity** for automated content moderation
+- **Bcrypt** for secure password hashing
+- **Pandas** for CSV data processing
+- **Python-Socket.IO** for real-time WebSocket communication
 
 **Frontend:**
 - React for UI components
-- JSX for dynamic page rendering
 - Tailwind CSS for styling
 - Socket.IO Client for real-time chat
-- Craco for configuration management
 
 ## Quick Start Guide
 
@@ -58,7 +64,8 @@ VITAP Faculty Hub is a web application designed to bridge the gap between studen
 - Python 3.8+
 - Node.js & npm/yarn
 - MongoDB (local or cloud)
-- OpenAlex API Key (for admin sync features)
+- Google Chrome (installed on the server/machine for Selenium scraping)
+- OpenAlex API Key (optional, for enhanced research sync)
 
 ### Installation Steps
 
@@ -81,12 +88,8 @@ pip install -r requirements.txt
 uvicorn server:socket_app --reload
 ```
 
-5. **Open a new terminal and open the same virtual environment here as well**
-  ```bash
-venv\Scripts\activate  # On Linux: source venv/bin/activate
-```
-
-6. **Install Dependencies & Start frontend**
+5. **Install Dependencies & Start frontend**
+Open a new terminal:
 ```bash
 cd frontend
 yarn install
@@ -96,53 +99,51 @@ yarn start
 ## API Endpoints
 
 **Authentication:**
-- POST /api/auth/register - Create new account (@vitapstudent.ac.in only)
-- POST /api/auth/login - User login
-- GET /api/auth/me - Get current user
-- POST /api/auth/logout - User logout
+- `POST /api/auth/register` - Create new account (@vitapstudent.ac.in only)
+- `POST /api/auth/login` - User login
+- `GET /api/auth/me` - Get current user
+- `POST /api/auth/logout` - User logout
 
 **Faculty Management:**
-- GET /api/faculty - View all faculty (filter by department)
-- GET /api/faculty/{id} - View specific faculty details
-- POST /api/faculty - Add new faculty (Admin only)
-- PATCH /api/faculty/{id} - Update faculty details (Admin only)
-- DELETE /api/faculty/{id} - Remove faculty (Admin only)
+- `GET /api/faculty` - View all faculty (filter by department)
+- `GET /api/faculty/{id}` - View specific faculty details
+- `POST /api/faculty` - Add new faculty (Admin only)
+- `PATCH /api/faculty/{id}` - Update faculty details (Admin only)
+- `DELETE /api/faculty/{id}` - Remove faculty (Admin only)
 
 **Ratings & Comments:**
-- POST /api/faculty/{id}/ratings - Submit or update rating
-- GET /api/faculty/{id}/ratings/me - Get your rating for a faculty
-- GET /api/faculty/{id}/comments - View all comments
-- POST /api/faculty/{id}/comments - Add a new comment
-- DELETE /api/comments/{id} - Delete a comment (Owner or Admin only)
+- `POST /api/faculty/{id}/ratings` - Submit or update rating
+- `GET /api/faculty/{id}/ratings/me` - Get your rating for a faculty
+- `GET /api/faculty/{id}/comments` - View all comments
+- `POST /api/faculty/{id}/comments` - Add a new comment (Profanity checked automatically)
+- `DELETE /api/comments/{id}` - Delete a comment (Owner or Admin only)
 
 **User Management (Admin):**
-- GET /api/admin/users - Get list of all registered users (Admin only)
-- PATCH /api/admin/users/{id} - Update user status (Make Admin/Block) (Admin only)
-- GET /api/users/{id} - View specific user profile (Self or Admin only)
+- `GET /api/admin/users` - Get list of all registered users (Admin only)
+- `PATCH /api/admin/users/{id}` - Update user status (Admin/Block) (Admin only)
 
 **Recommendations & Rankings:**
-- GET /api/recommendations - Get personalized faculty suggestions
-- GET /api/rankings - View faculty rankings by category
+- `GET /api/recommendations` - Get personalized faculty suggestions with reasons
+- `GET /api/rankings` - View faculty rankings by category
 
 **Communication:**
-- GET /api/chats - Get all chat conversations
-- POST /api/chats/messages - Send a message
+- `GET /api/chats` - Get all chat conversations
+- `POST /api/chats/messages` - Send a message
 
 **Admin Features:**
-- POST /api/admin/sync-openalex - Sync faculty research data from OpenAlex
+- `POST /api/admin/sync-website` - Manually trigger VIT-AP website scrape (Selenium)
+- `POST /api/admin/sync-openalex` - Manually trigger OpenAlex research data sync
 
 ## Configuration Details
 
-**MongoDB Setup:**
-- Local: Install MongoDB Community Server
-- Cloud: Use MongoDB Atlas (free tier available)
-- Database initializes automatically with demo data if empty
+**Database Initialization:**
+- On startup, if the database is empty, the system checks for `faculty_data.csv`.
+- If no CSV is found, it generates Demo Data for testing.
+- Admin and Demo users are automatically seeded based on `.env` variables.
 
-**OpenAlex API:**
-1. Sign up at openalex.org
-2. Get your API key
-3. Add to `.env` file as `OPENALEX_API_KEY`
-4. Used for syncing publications and projects
+**OpenAlex Integration:**
+- The sync uses advanced name tokenization to match faculty names even if formats differ (e.g., "Dr. J. Smith" vs "John Smith").
+- It specifically verifies institutional lineage to ensure only VIT-AP publications are synced.
 
 ## License
 
@@ -152,4 +153,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](./LICEN
 
 ## Acknowledgments
 
-Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, and the Socket.IO community for real-time capabilities. We thank you from the bottom of our hearts for helping us complete this project.
+Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, and the Socket.IO community for real-time capabilities. Special thanks to the Selenium project for enabling automated data freshness.

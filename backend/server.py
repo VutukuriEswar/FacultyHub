@@ -818,6 +818,11 @@ async def perform_sync_openalex():
 @app.on_event("startup")
 async def startup_event():
     logging.info("Checking database for faculty data...")
+    
+    # Explicitly load profanity word list
+    profanity.load_censor_words()
+    logging.info("Profanity filter initialized.")
+
     count = await db.faculty.count_documents({})
     
     if count == 0:
@@ -1342,7 +1347,10 @@ async def create_comment(faculty_id: str, comment: CommentCreate, current_user: 
     faculty_doc = await db.faculty.find_one({"faculty_id": faculty_id})
     detected_profanity = False
     
-    if profanity.contains_profanity(comment.content):
+    # Strip HTML tags and check profanity
+    clean_content = re.sub(r'<[^>]+>', '', comment.content)
+    
+    if profanity.contains_profanity(clean_content):
         detected_profanity = True
         logging.warning(f"Profanity detected from user {current_user.email} on faculty {faculty_id}")
         
