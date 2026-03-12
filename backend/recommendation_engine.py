@@ -10,6 +10,17 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import CrossEncoder
+from rank_bm25 import BM25Okapi
+import nltk
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except nltk.downloader.DownloadError:
+    nltk.download('punkt', quiet=True)
+    nltk.download('stopwords', quiet=True)
+
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
 
 SCRIPT_DIR = Path(__file__).parent
 PERSIST_DIR = SCRIPT_DIR / "chroma_db"
@@ -34,7 +45,7 @@ class FacultyRecommender:
         self.persist_dir = persist_dir or str(PERSIST_DIR)
         self.model_name = model_name
         
-        logging.info(f"Initializing FacultyRecommender...")
+        logging.info(f"Initializing FacultyRecommender with Hybrid Search (BM25 + Vector)...")
         try:
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=self.model_name,
@@ -55,6 +66,11 @@ class FacultyRecommender:
                 chunk_overlap=100,
                 length_function=len
             )
+            
+            self.bm25 = None
+            self.bm25_docs = []
+            self.stop_words = set(stopwords.words('english'))
+            
             logging.info("System Ready.")
             
         except Exception as e:
@@ -64,6 +80,12 @@ class FacultyRecommender:
     @staticmethod
     def get_instance():
         return FacultyRecommender()
+
+    def _preprocess_text(self, text: str) -> List[str]:
+        text = text.lower()
+        tokens = word_tokenize(text)
+        tokens = [t for t in tokens if t.isalnum() and t not in self.stop_words]
+        return tokens
 
     def _create_search_text(self, faculty_data: Dict[str, Any]) -> str:
         parts = []
@@ -142,143 +164,122 @@ class FacultyRecommender:
                 batch_docs = all_docs[i:i + batch_size]
                 batch_ids = all_ids[i:i + batch_size]
                 self.vector_store.add_documents(documents=batch_docs, ids=batch_ids)
-                
-            logging.info("Vector sync complete.")
+            
+            logging.info("Initializing BM25 Index for Hybrid Search...")
+            tokenized_corpus = [self._preprocess_text(doc.page_content) for doc in all_docs]
+            self.bm25 = BM25Okapi(tokenized_corpus)
+            self.bm25_docs = all_docs
+            
+            logging.info("Vector and BM25 sync complete.")
             return True
         except Exception as e:
             logging.error(f"Error executing full sync: {e}")
             return False
 
-    def _calculate_keyword_score(self, content: str, keyword: str) -> (float, List[str]):
-        reasons = []
-        interest_score = 0.0
-        project_score = 0.0
+    def _reciprocal_rank_fusion(self, results: Dict[str, Dict], k: int = 60) -> Dict[str, float]:
+        fused_scores = {}
+        for system, doc_list in results.items():
+            for rank, entry in enumerate(doc_list):
+                doc_id = entry['doc_id']
+                if doc_id not in fused_scores:
+                    fused_scores[doc_id] = 0
+                fused_scores[doc_id] += 1 / (k + rank + 1)
         
-        kw_lower = keyword.lower()
-        interest_match = re.search(r"Research Interests: (.*?)(?:\n|$)", content)
-        if interest_match:
-            interests_str = interest_match.group(1)
-            interests_list = [i.strip() for i in interests_str.split(',') if i.strip()]
-            total_interests = len(interests_list)
-            
-            if total_interests > 0:
-                matched = [i for i in interests_list if kw_lower in i.lower()]
-                if matched:
-                    ratio = len(matched) / total_interests
-                    interest_score = ratio * 60.0
-                    reasons.append(f"Matched {len(matched)} of {total_interests} research interests")
-
-        project_match = re.search(r"Projects & Publications: (.*?)(?:\n|$)", content)
-        if project_match:
-            projs_str = project_match.group(1)
-            projs_list = [p.strip() for p in projs_str.split(';') if p.strip()]
-            total_projs = len(projs_list)
-            
-            if total_projs > 0:
-                matched = [p for p in projs_list if kw_lower in p.lower()]
-                if matched:
-                    ratio = len(matched) / total_projs
-                    project_score = ratio * 40.0
-                    reasons.append(f"Matched {len(matched)} of {total_projs} projects")
-
-        if not reasons and kw_lower in content.lower():
-            return 50.0, ["Keyword mentioned in profile"]
-
-        total_score = interest_score + project_score
-        return total_score, reasons
+        sorted_fused = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+        return sorted_fused
 
     def search_faculty(self, query_text: str, top_k: int = 100) -> List[Dict[str, Any]]:
         if not query_text.strip():
             return []
 
         try:
-            try:
-                keyword_docs = self.vector_store.similarity_search(
-                    query_text, k=500, filter={"$contains": query_text}
-                )
-            except Exception:
-                broad_docs = self.vector_store.similarity_search(query_text, k=500)
-                keyword_docs = [d for d in broad_docs if query_text.lower() in d.page_content.lower()]
-
-            keyword_results = {}
+            hybrid_results = {"vector": [], "bm25": []}
             
-            for doc in keyword_docs:
-                fac_id = doc.metadata.get("faculty_id")
-                if not fac_id: continue
-                score, reasons = self._calculate_keyword_score(doc.page_content, query_text)
-                if score == 0 and query_text.lower() in doc.page_content.lower():
-                    score = 25.0 
-                    reasons = ["Keyword found in text"]
-                if fac_id not in keyword_results or keyword_results[fac_id]['score'] < score:
-                    keyword_results[fac_id] = {
-                        "metadata": doc.metadata,
-                        "score": score,
-                        "reasons": reasons,
-                        "content": doc.page_content
-                    }
-
-            vector_candidates = self.vector_store.similarity_search_with_score(query_text, k=top_k * 3)            
-            semantic_results = {}            
-            rerank_inputs = []
-            candidate_map = []
-
+            vector_candidates = self.vector_store.similarity_search_with_score(query_text, k=top_k * 3)
+            
+            doc_map = {}
             for doc, dist_score in vector_candidates:
                 fac_id = doc.metadata.get("faculty_id")
                 if not fac_id: continue
-                candidate_map.append((fac_id, doc, dist_score))
-                rerank_inputs.append((query_text, doc.page_content))
-
-            if rerank_inputs:
-                rerank_scores = self.reranker.predict(rerank_inputs)
                 
-                for i, (fac_id, doc, dist_score) in enumerate(candidate_map):
-                    rerank_val = rerank_scores[i]
-                    
-                    if rerank_val < -0.5: 
-                        continue
-                    
-                    normalized_score = 1 / (1 + math.exp(-rerank_val / 3)) * 100
-                    
-                    if normalized_score > 30.0:
-                        if fac_id not in semantic_results or semantic_results[fac_id]['score'] < normalized_score:
-                            semantic_results[fac_id] = {
-                                "metadata": doc.metadata,
-                                "score": normalized_score,
-                                "reasons": [f"Semantic Match ({normalized_score:.1f}%)"],
-                                "content": doc.page_content
-                            }
-            final_results = {}            
-            for fac_id, data in keyword_results.items():
-                kw_score = data['score']
-                reasons = data['reasons']
+                rerank_val = 1 / (1 + dist_score) 
                 
-                if fac_id in semantic_results:
-                    sem_score = semantic_results[fac_id]['score']
-                    reasons.append(f"Semantic Match ({sem_score:.1f}%)")
-                    
-                    final_score = (kw_score + sem_score) / 2 + 10.0 
-                else:
-                    final_score = kw_score
-                
-                final_results[fac_id] = {
-                    "faculty_id": fac_id,
-                    "name": data["metadata"].get("name"),
-                    "department": data["metadata"].get("department"),
-                    "similarity_pct": round(min(final_score, 100), 2),
-                    "match_reasons": reasons
-                }
-
-            for fac_id, data in semantic_results.items():
-                if fac_id not in final_results:
-                    final_results[fac_id] = {
-                        "faculty_id": fac_id,
-                        "name": data["metadata"].get("name"),
-                        "department": data["metadata"].get("department"),
-                        "similarity_pct": round(data['score'], 2),
-                        "match_reasons": data['reasons']
+                if fac_id not in doc_map or doc_map[fac_id]['score'] < rerank_val:
+                    doc_map[fac_id] = {
+                        "doc_id": fac_id,
+                        "score": rerank_val, 
+                        "metadata": doc.metadata,
+                        "content": doc.page_content
                     }
 
-            sorted_results = sorted(final_results.values(), key=lambda x: x['similarity_pct'], reverse=True)            
+            hybrid_results["vector"] = list(doc_map.values())
+            
+            if self.bm25:
+                tokenized_query = self._preprocess_text(query_text)
+                bm25_scores = self.bm25.get_scores(tokenized_query)
+                top_n_indices = bm25_scores.argsort()[-(top_k * 3):][::-1]
+                
+                bm25_doc_map = {}
+                for idx in top_n_indices:
+                    doc = self.bm25_docs[idx]
+                    fac_id = doc.metadata.get("faculty_id")
+                    if not fac_id: continue
+                    
+                    if fac_id not in bm25_doc_map:
+                         bm25_doc_map[fac_id] = {
+                            "doc_id": fac_id,
+                            "score": bm25_scores[idx],
+                            "metadata": doc.metadata,
+                            "content": doc.page_content
+                        }
+                hybrid_results["bm25"] = list(bm25_doc_map.values())
+
+            fused_ranking = self._reciprocal_rank_fusion(hybrid_results)
+            
+            candidate_contents = []
+            candidate_map = []
+            
+            seen_ids = set()
+            
+            for doc_id, score in fused_ranking:
+                if doc_id in seen_ids: continue
+                seen_ids.add(doc_id)
+                
+                data = None
+                if doc_id in doc_map:
+                    data = doc_map[doc_id]
+                elif self.bm25:
+                     for entry in hybrid_results["bm25"]:
+                         if entry['doc_id'] == doc_id:
+                             data = entry
+                             break
+                
+                if data:
+                    candidate_contents.append((query_text, data['content']))
+                    candidate_map.append((doc_id, data))
+
+            if not candidate_contents:
+                return []
+
+            rerank_scores = self.reranker.predict(candidate_contents)
+            
+            final_results = []
+            for i, (doc_id, data) in enumerate(candidate_map):
+                rerank_val = rerank_scores[i]
+                
+                normalized_score = 1 / (1 + math.exp(-rerank_val / 3)) * 100
+                
+                if normalized_score > 20.0:
+                    final_results.append({
+                        "faculty_id": doc_id,
+                        "name": data["metadata"].get("name"),
+                        "department": data["metadata"].get("department"),
+                        "similarity_pct": round(min(normalized_score, 100), 2),
+                        "match_reasons": [f"Hybrid Match ({normalized_score:.1f}%)"],
+                        "content": data['content']
+                    })
+
+            sorted_results = sorted(final_results, key=lambda x: x['similarity_pct'], reverse=True)            
             return sorted_results[:top_k]
 
         except Exception as e:

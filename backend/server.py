@@ -1,17 +1,19 @@
+import sys
+import asyncio
 import os
 import logging
 import random
+import time
+import re
 import json
 import requests
 import smtplib
-import asyncio
 import bcrypt
 import socketio
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 import uuid
-
 import pandas as pd
 import numpy as np
 from better_profanity import profanity
@@ -24,8 +26,18 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import uvicorn
 from recommendation_engine import FacultyRecommender
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 def send_smtp_email_sync(recipient: str, subject: str, body_html: str):
     smtp_host = os.environ.get('SMTP_HOST')
@@ -80,12 +92,12 @@ cors_origins = _cors_env.split(',')
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=cors_origins)
 app = FastAPI()
 socket_app = socketio.ASGIApp(sio, app)
+scheduler = AsyncIOScheduler()
 
 api_router = APIRouter(prefix="/api")
 
 VIT_INSTITUTION_LINEAGE = "i4401726783"
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-
 ADMIN_ENV_EMAIL = os.environ.get('ADMIN_EMAIL')
 ADMIN_ENV_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
@@ -250,15 +262,11 @@ def load_faculty_from_csv():
 
         for index, row in df.iterrows():
             raw_name = names.iloc[index]
+            if pd.isna(raw_name): continue
             raw_des = designations.iloc[index]
-            raw_profile_url = profile_urls.iloc[index] if 'profile_urls' in locals() else None
-            raw_email = emails.iloc[index]
             
-            prefixes_to_remove = [
-                "dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", 
-                "assistant professor", "associate professor", "dean", "hod"
-            ]
-            clean_faculty_name = raw_name
+            prefixes_to_remove = ["dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", "assistant professor", "associate professor", "dean", "hod"]
+            clean_faculty_name = str(raw_name)
             for prefix in prefixes_to_remove:
                 if clean_faculty_name.lower().startswith(prefix):
                     clean_faculty_name = clean_faculty_name[len(prefix):].strip()
@@ -266,30 +274,24 @@ def load_faculty_from_csv():
             if not clean_faculty_name:
                 logging.error(f"Skipping faculty {raw_name}: Name became empty")
                 continue
-
+            
             dept_val = "Unknown"
+            raw_profile_url = profile_urls.iloc[index] if 'profile_urls' in locals() else None
+            raw_email = emails.iloc[index]
             
             if raw_profile_url and not pd.isna(raw_profile_url):
                 url_str = str(raw_profile_url).upper()
-                if "(SCOPE)" in url_str:
-                    dept_val = "SCOPE"
-                elif "(SENSE)" in url_str:
-                    dept_val = "SENSE"
-                elif "(SMEC)" in url_str:
-                    dept_val = "SMEC"
-                elif "(SAS)" in url_str:
-                    dept_val = "SAS"
-                elif "(VSB)" in url_str:
-                    dept_val = "VSB"
-                elif "(VSL)" in url_str:
-                    dept_val = "VSL"
-                elif "(VISH)" in url_str:
-                    dept_val = "VISH"
+                if "(SCOPE)" in url_str: dept_val = "SCOPE"
+                elif "(SENSE)" in url_str: dept_val = "SENSE"
+                elif "(SMEC)" in url_str: dept_val = "SMEC"
+                elif "(SAS)" in url_str: dept_val = "SAS"
+                elif "(VSB)" in url_str: dept_val = "VSB"
+                elif "(VSL)" in url_str: dept_val = "VSL"
+                elif "(VISH)" in url_str: dept_val = "VISH"
 
             if dept_val == "Unknown" and not pd.isna(raw_des):
                 des_text = str(raw_des).upper()
                 tokens = des_text.replace(',', ' ').replace(';', ' ').split()
-                
                 valid_depts = ["SCOPE", "SENSE", "SMEC", "SAS", "VSB", "VSL", "VISH"]
                 for token in tokens:
                     if token in valid_depts:
@@ -313,8 +315,7 @@ def load_faculty_from_csv():
                 for part in parts:
                     if part not in ["SCOPE", "SENSE", "SMEC", "SAS", "VSB", "VSL", "VISH", "REGISTRAR", "VICE CHANCELLOR"]:
                         cleaned_parts.append(part)
-                
-                cleaned_des = ", ".join(cleaned_parts) if cleaned_parts else raw_des
+                cleaned_des = ", ".join(cleaned_parts) if cleaned_parts else str(raw_des)
             else:
                 cleaned_des = "Unknown"
             
@@ -347,16 +348,7 @@ def load_faculty_from_csv():
                 "phone": phone_val,
             }
             
-            skipped_cols = ['Name', 'Name of Faculty', 'Faculty Name', 
-                            'Department', 'Dept', 'School Name', 'School Name',
-                            'Designation', 'Title', 'Position', 'Role',
-                            'Image', 'Image URL', 'Profile Picture', 'Photo', 'Picture', 'Image_URL',
-                            'Specialisation', 'Specialization', 'Research Interests', 'Research', 'Area of Specialization',
-                            'Office Address', 'Office_Address', 'Address', 'Office', 'Location',
-                            'Email', 'Email Address', 
-                            'Phone', 'Mobile', 'Contact', 'Mobile Number',
-                            'Profile URL', 'Profile_URL', 'Profile', 'Link',
-                            'faculty_id']
+            skipped_cols = ['Name', 'Name of Faculty', 'Faculty Name', 'Department', 'Dept', 'School Name', 'School Name', 'Designation', 'Title', 'Position', 'Role', 'Image', 'Image URL', 'Profile Picture', 'Photo', 'Picture', 'Image_URL', 'Specialisation', 'Specialization', 'Research Interests', 'Research', 'Area of Specialization', 'Office Address', 'Office_Address', 'Address', 'Office', 'Location', 'Email', 'Email Address', 'Phone', 'Mobile', 'Contact', 'Mobile Number', 'Profile URL', 'Profile_URL', 'Profile', 'Link', 'faculty_id']
             
             for col in df.columns:
                 should_skip = False
@@ -408,50 +400,420 @@ def get_demo_faculty():
         return facs
 
     all_faculty = []
-    
-    all_faculty.extend(gen_dept_faculty('SCOPE', [
-        "Dr. Ada Lovelace", "Prof. Alan Turing", "Dr. Grace Hopper", "Prof. Donald Knuth",
-        "Dr. Linus Torvalds", "Prof. Tim Berners-Lee", "Dr. Margaret Hamilton", "Prof. Dennis Ritchie",
-        "Dr. Sophie Wilson", "Prof. Guido van Rossum"
-    ], ["Professor", "Associate Professor", "Assistant Professor", "HOD"]))
-
-    all_faculty.extend(gen_dept_faculty('SENSE', [
-        "Dr. Nikola Tesla", "Prof. Michael Faraday", "Dr. Guglielmo Marconi", "Prof. Samuel Morse",
-        "Dr. Claude Shannon", "Prof. Jack Kilby", "Dr. Robert Noyce", "Prof. Gordon Moore",
-        "Dr. Andrew Grove", "Prof. Robert Hall"
-    ], ["Dean", "Professor", "Associate Professor", "Assistant Professor"]))
-
-    all_faculty.extend(gen_dept_faculty('SMEC', [
-        "Dr. Henry Ford", "Prof. Karl Benz", "Prof. Rudolf Diesel", "Dr. James Watt",
-        "Prof. George Stephenson", "Dr. Isambard Brunel", "Prof. Nikolaus Otto", "Dr. Elijah McCoy",
-        "Prof. Gottlieb Daimler", "Dr. Charles Kettering"
-    ], ["Professor", "HOD", "Associate Professor", "Assistant Professor"]))
-
-    all_faculty.extend(gen_dept_faculty('SAS', [
-        "Dr. Marie Curie", "Prof. Albert Einstein", "Dr. Isaac Newton", "Prof. Galileo Galilei",
-        "Dr. Richard Feynman", "Prof. Stephen Hawking", "Dr. Neil deGrasse Tyson", "Prof. Rosalind Franklin",
-        "Dr. Dmitri Mendeleev", "Prof. Louis Pasteur"
-    ], ["Senior Professor", "Professor", "Associate Professor", "Assistant Professor"]))
-
-    all_faculty.extend(gen_dept_faculty('VSB', [
-        "Dr. Peter Drucker", "Prof. Adam Smith", "Dr. Warren Buffett", "Prof. John Keynes",
-        "Dr. Michael Porter", "Prof. Philip Kotler", "Dr. Jack Welch", "Prof. Henry Mintzberg",
-        "Dr. Jim Collins", "Prof. Clayton Christensen"
-    ], ["Professor", "Dean", "Associate Professor", "Assistant Professor"]))
-
-    all_faculty.extend(gen_dept_faculty('VSL', [
-        "Dr. Ruth Bader Ginsburg", "Prof. Oliver Wendell Holmes", "Dr. Thurgood Marshall", "Prof. Sandra Day O'Connor",
-        "Dr. William Blackstone", "Prof. Hugo Black", "Dr. Learned Hand", "Prof. Benjamin Cardozo",
-        "Dr. John Marshall", "Prof. Antonin Scalia"
-    ], ["Senior Advocate", "Professor", "Associate Professor", "HOD"]))
-
-    all_faculty.extend(gen_dept_faculty('VISH', [
-        "Dr. Sigmund Freud", "Prof. Carl Jung", "Dr. B.F. Skinner", "Prof. Jean Piaget",
-        "Dr. Noam Chomsky", "Prof. Jane Goodall", "Dr. Margaret Mead", "Prof. Sigmund Freud",
-        "Dr. Abraham Maslow", "Prof. Erik Erikson"
-    ], ["Professor", "Assistant Professor", "Associate Professor", "Dean"]))
-
+    all_faculty.extend(gen_dept_faculty('SCOPE', ["Dr. Ada Lovelace", "Prof. Alan Turing", "Dr. Grace Hopper", "Prof. Donald Knuth", "Dr. Linus Torvalds", "Prof. Tim Berners-Lee", "Dr. Margaret Hamilton", "Prof. Dennis Ritchie", "Dr. Sophie Wilson", "Prof. Guido van Rossum"], ["Professor", "Associate Professor", "Assistant Professor", "HOD"]))
+    all_faculty.extend(gen_dept_faculty('SENSE', ["Dr. Nikola Tesla", "Prof. Michael Faraday", "Dr. Guglielmo Marconi", "Prof. Samuel Morse", "Dr. Claude Shannon", "Prof. Jack Kilby", "Dr. Robert Noyce", "Prof. Gordon Moore", "Dr. Andrew Grove", "Prof. Robert Hall"], ["Dean", "Professor", "Associate Professor", "Assistant Professor"]))
+    all_faculty.extend(gen_dept_faculty('SMEC', ["Dr. Henry Ford", "Prof. Karl Benz", "Prof. Rudolf Diesel", "Dr. James Watt", "Prof. George Stephenson", "Dr. Isambard Brunel", "Prof. Nikolaus Otto", "Dr. Elijah McCoy", "Prof. Gottlieb Daimler", "Dr. Charles Kettering"], ["Professor", "HOD", "Associate Professor", "Assistant Professor"]))
+    all_faculty.extend(gen_dept_faculty('SAS', ["Dr. Marie Curie", "Prof. Albert Einstein", "Dr. Isaac Newton", "Prof. Galileo Galilei", "Dr. Richard Feynman", "Prof. Stephen Hawking", "Dr. Neil deGrasse Tyson", "Prof. Rosalind Franklin", "Dr. Dmitri Mendeleev", "Prof. Louis Pasteur"], ["Senior Professor", "Professor", "Associate Professor", "Assistant Professor"]))
+    all_faculty.extend(gen_dept_faculty('VSB', ["Dr. Peter Drucker", "Prof. Adam Smith", "Dr. Warren Buffett", "Prof. John Keynes", "Dr. Michael Porter", "Prof. Philip Kotler", "Dr. Jack Welch", "Prof. Henry Mintzberg", "Dr. Jim Collins", "Prof. Clayton Christensen"], ["Professor", "Dean", "Associate Professor", "Assistant Professor"]))
+    all_faculty.extend(gen_dept_faculty('VSL', ["Dr. Ruth Bader Ginsburg", "Prof. Oliver Wendell Holmes", "Dr. Thurgood Marshall", "Prof. Sandra Day O'Connor", "Dr. William Blackstone", "Prof. Hugo Black", "Dr. Learned Hand", "Prof. Benjamin Cardozo", "Dr. John Marshall", "Prof. Antonin Scalia"], ["Senior Advocate", "Professor", "Associate Professor", "HOD"]))
+    all_faculty.extend(gen_dept_faculty('VISH', ["Dr. Sigmund Freud", "Prof. Carl Jung", "Dr. B.F. Skinner", "Prof. Jean Piaget", "Dr. Noam Chomsky", "Prof. Jane Goodall", "Dr. Margaret Mead", "Prof. Sigmund Freud", "Dr. Abraham Maslow", "Prof. Erik Erikson"], ["Professor", "Assistant Professor", "Associate Professor", "Dean"]))
     return all_faculty
+
+SELECTORS = {
+    "card_link": "//a[contains(@href, '/faculty/')]",
+    "card_name": ".//h1[contains(@class, 'text-[16px]')]",
+    "card_desig": ".//h1[contains(@class, 'text-[12px]')]",
+    "card_img": ".//img",
+    "next_button": "//div[contains(@class, 'bg-[#DCCED0]')]//div[contains(@class, 'cursor-pointer')][last()]",
+    "email_link": "//a[contains(@href, 'mailto:')]",
+    "specialisation_label": "Specialisation",
+    "address_label": "Office Address"
+}
+
+def _get_text_after_label(driver, label_text):
+    try:
+        elem = driver.find_element(By.XPATH, f"//*[contains(text(), '{label_text}')]/..")
+        full_text = elem.text
+        return full_text.replace(label_text, "").replace(":", "").strip()
+    except:
+        return "N/A"
+
+def _run_selenium_scraper_sync():
+    logging.info("Starting Selenium Scraper to update faculty_data.csv...")
+    options = webdriver.ChromeOptions()
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver.maximize_window()
+    driver.get("https://vitap.ac.in/allfaculty")
+    
+    all_faculty_data = []
+    seen_urls = set()
+    page_count = 1
+
+    try:
+        while True:
+            logging.info(f"Scraping Page {page_count}...")
+            try:
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.XPATH, SELECTORS["card_link"])))
+            except:
+                logging.info("No cards found. Ending.")
+                break
+
+            cards = driver.find_elements(By.XPATH, SELECTORS["card_link"])
+            
+            try:
+                first_card_url = cards[0].get_attribute("href")
+                if first_card_url in seen_urls:
+                    logging.info("Loop detected. Stopping script.")
+                    break
+            except Exception:
+                pass
+
+            page_listings = []
+            for card in cards:
+                try:
+                    url = card.get_attribute("href")
+                    seen_urls.add(url)
+                    name = card.find_element(By.XPATH, SELECTORS["card_name"]).text.strip()
+                    desig = card.find_element(By.XPATH, SELECTORS["card_desig"]).text.strip()
+                    img_src = card.find_element(By.XPATH, SELECTORS["card_img"]).get_attribute("src")
+                    
+                    page_listings.append({
+                        "Name": name,
+                        "Designation": desig,
+                        "Image_URL": img_src,
+                        "Profile_URL": url
+                    })
+                except Exception:
+                    pass
+
+            for person in page_listings:
+                time.sleep(random.uniform(1.0, 2.0))
+                driver.execute_script(f"window.open('{person['Profile_URL']}', '_blank');")
+                driver.switch_to.window(driver.window_handles[1])
+                
+                try:
+                    WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    
+                    try:
+                        email = driver.find_element(By.XPATH, SELECTORS["email_link"]).text.strip()
+                    except:
+                        email = _get_text_after_label(driver, "Email")
+                        
+                    spec = _get_text_after_label(driver, SELECTORS["specialisation_label"])
+                    address = _get_text_after_label(driver, SELECTORS["address_label"])
+
+                    person["Email"] = email
+                    person["Specialisation"] = spec
+                    person["Office_Address"] = address
+                    
+                    all_faculty_data.append(person)
+                except Exception as e:
+                    logging.error(f"Error scraping {person.get('Name')}: {e}")
+                
+                driver.close()
+                driver.switch_to.window(driver.window_handles[0])
+
+            try:
+                next_btn = driver.find_element(By.XPATH, SELECTORS["next_button"])
+                time.sleep(random.uniform(2.0, 3.0))
+                driver.execute_script("arguments[0].click();", next_btn)
+                time.sleep(3)
+                page_count += 1
+            except Exception:
+                logging.info("Next button issue or end of pagination. Stopping.")
+                break
+
+    except Exception as e:
+        logging.error(f"Critical Scraper Error: {e}")
+    finally:
+        driver.quit()
+        
+    if all_faculty_data:
+        df = pd.DataFrame(all_faculty_data)
+        cols = ["Name", "Designation", "Specialisation", "Email", "Office_Address", "Image_URL", "Profile_URL"]
+        existing_cols = [c for c in cols if c in df.columns]
+        df = df[existing_cols]
+        df.to_csv(ROOT_DIR / "faculty_data.csv", index=False)
+        logging.info(f"Scraper finished. Saved {len(df)} records to faculty_data.csv.")
+        return True
+    else:
+        logging.warning("Scraper finished with no data.")
+        return False
+
+async def perform_csv_sync_and_db_update():
+    logging.info("Executing Scheduled CSV Sync...")
+    
+    loop = asyncio.get_event_loop()
+    scrape_success = await loop.run_in_executor(None, _run_selenium_scraper_sync)
+    
+    if not scrape_success:
+        logging.warning("Scraping failed. DB update aborted.")
+        return {"status": "failed", "message": "Scraping failed"}
+
+    csv_faculty = load_faculty_from_csv()
+    if not csv_faculty:
+        logging.warning("CSV loaded empty after scrape.")
+        return {"status": "failed", "message": "Empty CSV"}
+
+    db_faculty = await db.faculty.find({}, {"faculty_id": 1, "name": 1, "department": 1, "designation": 1, "email": 1, "image_url": 1, "office_address": 1, "research_interests": 1}).to_list(None)
+    db_map = {f['name'].lower().strip(): f for f in db_faculty}
+    
+    csv_map = {f['name'].lower().strip(): f for f in csv_faculty}
+    
+    new_faculty = []
+    missing_faculty = []
+    updated_faculty = []
+
+    for name_lower, csv_data in csv_map.items():
+        if name_lower not in db_map:
+            new_faculty.append(csv_data)
+        else:
+            db_doc = db_map[name_lower]
+            updates = {}
+            
+            if csv_data.get('designation') and csv_data['designation'] != db_doc.get('designation'):
+                updates['designation'] = csv_data['designation']
+            if csv_data.get('email') and csv_data['email'] != db_doc.get('email'):
+                updates['email'] = csv_data['email']
+            if csv_data.get('image_url') and csv_data['image_url'] != db_doc.get('image_url'):
+                updates['image_url'] = csv_data['image_url']
+            if csv_data.get('office_address') and csv_data['office_address'] != db_doc.get('office_address'):
+                updates['office_address'] = csv_data['office_address']
+            if csv_data.get('department') and csv_data['department'] != db_doc.get('department'):
+                updates['department'] = csv_data['department']
+            if csv_data.get('research_interests') and csv_data['research_interests'] != db_doc.get('research_interests'):
+                updates['research_interests'] = csv_data['research_interests']
+
+            if updates:
+                updated_faculty.append({"id": db_doc["faculty_id"], "name": db_doc["name"], "updates": updates})
+
+    for name_lower, db_doc in db_map.items():
+        if name_lower not in csv_map and not db_doc['faculty_id'].startswith("demo_"):
+            missing_faculty.append(db_doc)
+
+    if new_faculty:
+        logging.info(f"Found {len(new_faculty)} new faculty. Inserting...")
+        await db.faculty.insert_many(new_faculty)
+        if ADMIN_ENV_EMAIL:
+            names_list = "<br>".join([f"- {f['name']} ({f['department']})" for f in new_faculty])
+            body = f"<h3>New Faculty Detected:</h3><p>{names_list}</p>"
+            await send_email_async(ADMIN_ENV_EMAIL, "New Faculty Added - VIT-AP Faculty Hub", body)
+            
+    if updated_faculty:
+        logging.info(f"Found {len(updated_faculty)} faculty updates.")
+        for u in updated_faculty:
+            await db.faculty.update_one({"faculty_id": u["id"]}, {"$set": u["updates"]})
+
+    if missing_faculty:
+        logging.info(f"Found {len(missing_faculty)} faculty missing in CSV.")
+        if ADMIN_ENV_EMAIL:
+            names_list = "<br>".join([f"- {f['name']} ({f['department']})" for f in missing_faculty])
+            body = f"<h3>Missing Faculty Alert:</h3><p>The following are in DB but missing in CSV:</p><p>{names_list}</p>"
+            await send_email_async(ADMIN_ENV_EMAIL, "Missing Faculty Alert - VIT-AP Faculty Hub", body)
+            
+    try:
+        recommender = FacultyRecommender.get_instance()
+        fresh_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+        await loop.run_in_executor(None, recommender.sync_all_faculty, fresh_faculty)
+    except Exception as e:
+        logging.error(f"Vector sync failed: {e}")
+
+    return {
+        "status": "success", 
+        "new_count": len(new_faculty), 
+        "missing_count": len(missing_faculty), 
+        "updated_count": len(updated_faculty)
+    }
+
+async def perform_sync_openalex():
+    logging.info("Executing Scheduled OpenAlex Sync...")
+    local_api_key = os.environ.get('OPENALEX_API_KEY')
+    if not local_api_key:
+        logging.warning("OpenAlex API key missing for scheduled job.")
+        return
+
+    all_faculty_data = await db.faculty.find({}, {"_id": 0}).to_list(1000)
+    
+    updated_count = 0
+    skipped_count = 0
+    failed_count = 0
+    processed_names = []
+
+    def clean_name_string(name_str):
+        return name_str.lower().replace(",", "").replace(".", "").strip()
+
+    for faculty in all_faculty_data:
+        raw_name = faculty["name"]
+        prefixes = ["dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", "assistant professor", "associate professor", "dean", "hod"]
+        clean_faculty_name = raw_name
+        for prefix in prefixes:
+            if clean_faculty_name.lower().startswith(prefix):
+                clean_faculty_name = clean_faculty_name[len(prefix):].strip()
+        
+        if not clean_faculty_name:
+            logging.error(f"Skipping faculty {raw_name}: Name became empty")
+            skipped_count += 1
+            continue
+            
+        faculty_tokens = set(clean_name_string(clean_faculty_name).split())
+        
+        if not faculty_tokens:
+            continue
+            
+        if clean_faculty_name in processed_names:
+            logging.info(f"Skipping duplicate query for: {clean_faculty_name}")
+            skipped_count += 1
+            continue
+        processed_names.append(clean_faculty_name)
+
+        target_author_id = None
+
+        try:
+            url_author_search = "https://api.openalex.org/authors"
+            params_author = {
+                "filter": f"last_known_institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
+                "search": clean_faculty_name,
+                "per_page": 10,
+                "mailto": "admin@vitapstudent.ac.in"
+            }
+            headers = {"x-api-key": local_api_key}
+
+            logging.info(f"Searching for '{clean_faculty_name}' in VIT-AP authors...")
+            
+            response_author = requests.get(url_author_search, params=params_author, headers=headers)
+            
+            if response_author.status_code == 200 and response_author.json().get("results"):
+                data_author = response_author.json()
+                vit_authors = data_author["results"]
+                
+                found_match = False
+                for author in vit_authors:
+                    author_display = author.get("display_name", "")
+                    author_id = author.get("id", "")
+                    author_tokens = set(clean_name_string(author_display).split())
+
+                    if faculty_tokens == author_tokens:
+                        target_author_id = author_id
+                        logging.info(f"Exact Match Found: '{raw_name}' <-> '{author_display}'")
+                        found_match = True
+                        break
+                    
+                    if faculty_tokens.issubset(author_tokens) or author_tokens.issubset(faculty_tokens):
+                        overlap = len(faculty_tokens & author_tokens)
+                        if overlap >= min(len(faculty_tokens), len(author_tokens)):
+                            target_author_id = author_id
+                            logging.info(f"Subset Match Found: '{raw_name}' <-> '{author_display}'")
+                            found_match = True
+                            break
+
+                    full_author_tokens = [t for t in author_tokens if len(t) > 1]
+                    if any(t not in faculty_tokens for t in full_author_tokens):
+                        continue
+                    
+                    initial_author_tokens = [t for t in author_tokens if len(t) == 1]
+                    match_possible = True
+                    for initial in initial_author_tokens:
+                        if not any(f_token.startswith(initial) for f_token in faculty_tokens):
+                            match_possible = False
+                            break
+                    
+                    if match_possible:
+                        longest_author = max(author_tokens, key=len)
+                        if longest_author in faculty_tokens:
+                            target_author_id = author_id
+                            logging.info(f"Initial Match Found: '{raw_name}' <-> '{author_display}'")
+                            found_match = True
+                            break
+                
+                if not found_match:
+                    logging.info(f"Faculty '{raw_name}' NOT found in VIT-AP authors list.")
+                    skipped_count += 1
+                    continue
+            else:
+                if response_author.status_code != 200:
+                    logging.warning(f"Could not search VIT-AP authors. Status: {response_author.status_code}")
+                else:
+                    logging.info(f"No OpenAlex record found for '{clean_faculty_name}'. Skipping.")
+                skipped_count += 1
+                continue
+
+            if not target_author_id:
+                logging.info(f"No author ID found for '{raw_name}' at VIT-AP. Skipping.")
+                skipped_count += 1
+                continue
+
+            url_works_final = "https://api.openalex.org/works"
+            params_final = {
+                "filter": f"authorships.author.id:{target_author_id}", 
+                "per_page": 200,
+                "sort": "publication_year:desc",
+                "mailto": "admin@vitapstudent.ac.in"
+            }
+
+            response_works = requests.get(url_works_final, params=params_final, headers=headers)
+
+            if response_works.status_code != 200:
+                logging.error(f"Error fetching works for {target_author_id}: {response_works.text[:100]}")
+                failed_count += 1
+                continue
+
+            data_works = response_works.json()
+            clean_projects = []
+            
+            if "results" in data_works and data_works["results"]:
+                raw_results = data_works["results"]
+                for res in raw_results:
+                    if isinstance(res, dict):
+                        openalex_id = str(res.get("id", ""))
+                        title = str(res.get("title", ""))
+                        year_data = res.get("publication_year")
+                        pub_year = str(year_data) if year_data else "Unknown"
+                        pub_type = str(res.get("type", "") or "article")
+                        citation_count = int(res.get("cited_by_count", 0))
+                        
+                        is_vitap_work = False 
+                        authorships = res.get("authorships", [])
+                        for authorship in authorships:
+                            if authorship.get("author", {}).get("id", "") == target_author_id:
+                                institutions = authorship.get("institutions", [])
+                                for inst in institutions:
+                                    lineages = inst.get("lineage", [])
+                                    for lineage_item in lineages:
+                                        if VIT_INSTITUTION_LINEAGE in str(lineage_item):
+                                            is_vitap_work = True
+                                            break
+                                if is_vitap_work:
+                                    break
+
+                        clean_projects.append({
+                            "openalex_id": openalex_id,
+                            "title": title,
+                            "publication_year": pub_year,
+                            "type": pub_type,
+                            "is_vitap": is_vitap_work,
+                            "cited_by_count": citation_count
+                        })
+            
+            if clean_projects:
+                await db.faculty.update_one(
+                    {"faculty_id": faculty["faculty_id"]},
+                    {"$set": {"openalex_projects": clean_projects}}
+                )
+                updated_count += 1
+                logging.info(f"Updated {raw_name} with {len(clean_projects)} publications.")
+            else:
+                logging.info(f"No VIT-AP publications found for {raw_name}")
+                skipped_count += 1
+
+        except Exception as e:
+            logging.error(f"Error processing faculty {faculty.get('name')}: {e}")
+            failed_count += 1
+
+    logging.info(f"OpenAlex Sync completed. Updated: {updated_count}, Skipped: {skipped_count}, Failed: {failed_count}")
+    
+    try:
+        recommender = FacultyRecommender.get_instance()
+        if updated_count > 0:
+           fresh_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+           loop = asyncio.get_event_loop()
+           await loop.run_in_executor(None, recommender.sync_all_faculty, fresh_faculty)
+    except Exception as e:
+        logging.error(f"Vector sync after OpenAlex failed: {e}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -459,69 +821,54 @@ async def startup_event():
     count = await db.faculty.count_documents({})
     
     if count == 0:
-        logging.info("Database is empty. Initializing data...")
+        logging.info("Database is empty. Checking for CSV data...")
         csv_data = load_faculty_from_csv()
-        
         if csv_data:
-            logging.info(f"Found CSV with {len(csv_data)} records. Importing to DB...")
+            logging.info(f"Found {len(csv_data)} records in CSV. Importing...")
             await db.faculty.insert_many(csv_data)
-            logging.info("CSV Import complete.")
         else:
-            logging.info("No CSV found or CSV error. Loading Demo Data...")
+            logging.info("No CSV found. Falling back to Demo Data.")
             demo_data = get_demo_faculty()
             await db.faculty.insert_many(demo_data)
-            logging.info(f"Imported {len(demo_data)} demo faculty records.")
     else:
-        logging.info(f"Database already contains {count} faculty records. Skipping import.")
+        logging.info(f"Database already contains {count} faculty records.")
 
     logging.info("Initializing Vector Store...")
     try:
         loop = asyncio.get_event_loop()
-        
         def init_recommender_sync():
             return FacultyRecommender.get_instance()
-
         recommender = await loop.run_in_executor(None, init_recommender_sync)
-        
         all_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
-        
         logging.info("Syncing faculty to vector store...")
         await loop.run_in_executor(None, recommender.sync_all_faculty, all_faculty)
         logging.info("Vector Store sync finished.")
-        
     except Exception as e:
         logging.error(f"Failed to initialize Vector Store: {e}")
 
-    logging.info("Checking for seeded users and unified anonymous IDs...")
-    
+    logging.info("Initializing Schedulers...")
+    scheduler.add_job(perform_csv_sync_and_db_update, 'interval', hours=3, id='csv_sync')
+    scheduler.add_job(perform_sync_openalex, 'interval', hours=2, id='openalex_sync')
+    scheduler.start()
+
+    logging.info("Checking for seeded users...")
     users_cursor = db.users.find({})
     async for user_doc in users_cursor:
         update_data = {}
-        
         if not user_doc.get('anonymous_id'):
             new_id = str(random.randint(1000, 9999))
             update_data['anonymous_id'] = new_id
             update_data['anonymous_chat_id'] = new_id
             update_data['anonymous_comment_id'] = new_id
-            logging.info(f"Generated unified Anonymous ID {new_id} for user {user_doc.get('email')}")
-        
         elif user_doc.get('anonymous_chat_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_chat_id'] = user_doc.get('anonymous_id')
-
         elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
              update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
-        
-        if 'blocked' not in user_doc:
-            update_data['blocked'] = False
-
-        if 'theme_preference' not in user_doc:
-            update_data['theme_preference'] = 'light'
-
-        if update_data:
-            await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
+        if 'blocked' not in user_doc: update_data['blocked'] = False
+        if 'theme_preference' not in user_doc: update_data['theme_preference'] = 'light'
+        if update_data: await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
 
     admin_exists = await db.users.find_one({"is_admin": True})
-    
     if not admin_exists:
         if ADMIN_ENV_EMAIL and ADMIN_ENV_PASSWORD:
             logging.info(f"Creating Admin user from .env: {ADMIN_ENV_EMAIL}")
@@ -531,14 +878,9 @@ async def startup_event():
                 "email": ADMIN_ENV_EMAIL,
                 "name": "System Administrator",
                 "password_hash": get_password_hash(ADMIN_ENV_PASSWORD),
-                "is_admin": True,
-                "blocked": False, 
-                "preferences": [],
-                "ai_interests": [],
+                "is_admin": True, "blocked": False, "preferences": [], "ai_interests": [],
                 "created_at": datetime.now(timezone.utc),
-                "anonymous_id": unified_id,
-                "anonymous_chat_id": unified_id,
-                "anonymous_comment_id": unified_id,
+                "anonymous_id": unified_id, "anonymous_chat_id": unified_id, "anonymous_comment_id": unified_id,
                 "theme_preference": "light"
             })
         else:
@@ -550,48 +892,26 @@ async def startup_event():
         logging.info(f"Creating Demo user: {demo_email}")
         unified_id = str(random.randint(1000, 9999))
         await db.users.insert_one({
-            "user_id": f"user_demo_{uuid.uuid4().hex[:12]}",
-            "email": demo_email,
-            "name": "Demo User",
-            "password_hash": get_password_hash("Demo123"),
-            "is_admin": False,
-            "blocked": False, 
-            "preferences": [],
-            "ai_interests": [],
-            "created_at": datetime.now(timezone.utc),
-            "anonymous_id": unified_id,
-            "anonymous_chat_id": unified_id,
-            "anonymous_comment_id": unified_id,
+            "user_id": f"user_demo_{uuid.uuid4().hex[:12]}", "email": demo_email, "name": "Demo User",
+            "password_hash": get_password_hash("Demo123"), "is_admin": False, "blocked": False,
+            "preferences": [], "ai_interests": [], "created_at": datetime.now(timezone.utc),
+            "anonymous_id": unified_id, "anonymous_chat_id": unified_id, "anonymous_comment_id": unified_id,
             "theme_preference": "light"
         })
 
 async def get_current_user(request: Request, session_token: Optional[str] = Cookie(None)) -> User:
     token = session_token or request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
+    if not token: raise HTTPException(status_code=401, detail="Not authenticated")
     session_doc = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-    if not session_doc:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    
+    if not session_doc: raise HTTPException(status_code=401, detail="Invalid session")
     expires_at = session_doc["expires_at"]
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Session expired")
-    
+    if isinstance(expires_at, str): expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None: expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc): raise HTTPException(status_code=401, detail="Session expired")
     user_doc = await db.users.find_one({"user_id": session_doc["user_id"]}, {"_id": 0})
-    if not user_doc:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    if user_doc.get("blocked", False):
-        raise HTTPException(status_code=403, detail="Your account has been blocked by administrator.")
-    
-    if isinstance(user_doc["created_at"], str):
-        user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
-    
+    if not user_doc: raise HTTPException(status_code=404, detail="User not found")
+    if user_doc.get("blocked", False): raise HTTPException(status_code=403, detail="Your account has been blocked by administrator.")
+    if isinstance(user_doc["created_at"], str): user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     return User(**user_doc)
 
 @api_router.post("/auth/register")
@@ -765,7 +1085,6 @@ async def get_user_profile(target_user_id: str, current_user: User = Depends(get
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
         
     return User(**user_doc)
-
 
 @api_router.get("/faculty", response_model=List[Faculty])
 async def get_all_faculty(department: Optional[str] = None):
@@ -1238,7 +1557,7 @@ async def get_recommendations(
 
     user_rating_prefs = []
     if preferences:
-        user_rating_prefs = [p.strip() for p in preferences.split(",") if p.strip()]
+        user_rating_prefs = [p.strip().lower() for p in preferences.split(",") if p.strip()]
     
     if not user_rating_prefs and not target_interests:
         return []
@@ -1380,205 +1699,19 @@ async def sync_openalex_data(current_user: User = Depends(get_current_user)):
         logging.error("DEBUG: OPENALEX_API_KEY is MISSING in .env file!")
         raise HTTPException(status_code=400, detail="OPENALEX_API_KEY not found in environment variables.")
     
-    logging.info("Starting OpenAlex Sync (VIT-AP University Only)...")
-    
-    all_faculty_data = await db.faculty.find({}, {"_id": 0}).to_list(1000)
-    
-    updated_count = 0
-    skipped_count = 0
-    failed_count = 0
-    processed_names = []
+    asyncio.create_task(perform_sync_openalex())
+    return {"message": "OpenAlex Sync started in background"}
 
-    def clean_name_string(name_str):
-        return name_str.lower().replace(",", "").replace(".", "").strip()
-
-    for faculty in all_faculty_data:
-        raw_name = faculty["name"]
-        prefixes_to_remove = [
-            "dr.", "mr.", "ms.", "mrs.", "prof.", "dr", "prof", 
-            "assistant professor", "associate professor", "dean", "hod"
-        ]
-        clean_faculty_name = raw_name
-        for prefix in prefixes_to_remove:
-            if clean_faculty_name.lower().startswith(prefix):
-                clean_faculty_name = clean_faculty_name[len(prefix):].strip()
-        
-        if not clean_faculty_name:
-            logging.error(f"Skipping faculty {faculty.get('name')}: Name became empty")
-            skipped_count += 1
-            continue
-            
-        faculty_tokens = set(clean_name_string(clean_faculty_name).split())
-        
-        if not faculty_tokens:
-            continue
-            
-        if clean_faculty_name in processed_names:
-            logging.info(f"Skipping duplicate query for: {clean_faculty_name}")
-            skipped_count += 1
-            continue
-        processed_names.append(clean_faculty_name)
-
-        target_author_id = None
-
-        try:
-            url_author_search = "https://api.openalex.org/authors"
-            params_author = {
-                "filter": f"last_known_institutions.lineage:{VIT_INSTITUTION_LINEAGE}",
-                "search": clean_faculty_name,
-                "per_page": 10,
-                "mailto": "admin@vitapstudent.ac.in"
-            }
-            headers = {"x-api-key": api_key}
-
-            logging.info(f"Searching for '{clean_faculty_name}' in VIT-AP authors...")
-            
-            response_author = requests.get(url_author_search, params=params_author, headers=headers)
-            
-            if response_author.status_code == 200 and response_author.json().get("results"):
-                data_author = response_author.json()
-                vit_authors = data_author["results"]
-                
-                found_match = False
-                for author in vit_authors:
-                    author_display = author.get("display_name", "")
-                    author_id = author.get("id", "")
-                    author_tokens = set(clean_name_string(author_display).split())
-
-                    if faculty_tokens == author_tokens:
-                        target_author_id = author_id
-                        logging.info(f"Exact Match Found: '{raw_name}' <-> '{author_display}'")
-                        found_match = True
-                        break
-                    
-                    if faculty_tokens.issubset(author_tokens) or author_tokens.issubset(faculty_tokens):
-                        overlap = len(faculty_tokens & author_tokens)
-                        if overlap >= min(len(faculty_tokens), len(author_tokens)):
-                            target_author_id = author_id
-                            logging.info(f"Subset Match Found: '{raw_name}' <-> '{author_display}'")
-                            found_match = True
-                            break
-
-                    full_author_tokens = [t for t in author_tokens if len(t) >1]
-                    if any(t not in faculty_tokens for t in full_author_tokens):
-                        continue
-                    
-                    initial_author_tokens = [t for t in author_tokens if len(t) == 1]
-                    match_possible = True
-                    for initial in initial_author_tokens:
-                        if not any(f_token.startswith(initial) for f_token in faculty_tokens):
-                            match_possible = False
-                            break
-                    
-                    if match_possible:
-                        longest_author = max(author_tokens, key=len)
-                        if longest_author in faculty_tokens:
-                            target_author_id = author_id
-                            logging.info(f"Initial Match Found: '{raw_name}' <-> '{author_display}'")
-                            found_match = True
-                            break
-                
-                if not found_match:
-                    logging.info(f"Faculty '{raw_name}' NOT found in VIT-AP authors list.")
-                    skipped_count += 1
-                    continue
-            else:
-                if response_author.status_code != 200:
-                    logging.warning(f"Could not search VIT-AP authors. Status: {response_author.status_code}")
-                else:
-                    logging.info(f"No OpenAlex record found for '{clean_faculty_name}'. Skipping.")
-                skipped_count += 1
-                continue
-
-            if not target_author_id:
-                logging.info(f"No author ID found for '{raw_name}' at VIT-AP. Skipping.")
-                skipped_count += 1
-                continue
-
-            url_works_final = "https://api.openalex.org/works"
-            params_final = {
-                "filter": f"authorships.author.id:{target_author_id}", 
-                "per_page": 200,
-                "sort": "publication_year:desc",
-                "mailto": "admin@vitapstudent.ac.in"
-            }
-
-            response_works = requests.get(url_works_final, params=params_final, headers=headers)
-
-            if response_works.status_code != 200:
-                logging.error(f"Error fetching works for {target_author_id}: {response_works.text[:100]}")
-                failed_count += 1
-                continue
-
-            data_works = response_works.json()
-            clean_projects = []
-            
-            if "results" in data_works and data_works["results"]:
-                raw_results = data_works["results"]
-                for res in raw_results:
-                    if isinstance(res, dict):
-                        openalex_id = str(res.get("id", ""))
-                        title = str(res.get("title", ""))
-                        year_data = res.get("publication_year")
-                        pub_year = str(year_data) if year_data else "Unknown"
-                        pub_type = str(res.get("type", "") or "article")
-                        citation_count = int(res.get("cited_by_count", 0))
-                        
-                        is_vitap_work = False 
-                        authorships = res.get("authorships", [])
-                        for authorship in authorships:
-                            if authorship.get("author", {}).get("id", "") == target_author_id:
-                                institutions = authorship.get("institutions", [])
-                                for inst in institutions:
-                                    lineages = inst.get("lineage", [])
-                                    for lineage_item in lineages:
-                                        if VIT_INSTITUTION_LINEAGE in str(lineage_item):
-                                            is_vitap_work = True
-                                            break
-                                if is_vitap_work:
-                                    break
-
-                        clean_projects.append({
-                            "openalex_id": openalex_id,
-                            "title": title,
-                            "publication_year": pub_year,
-                            "type": pub_type,
-                            "is_vitap": is_vitap_work,
-                            "cited_by_count": citation_count
-                        })
-            
-            if clean_projects:
-                await db.faculty.update_one(
-                    {"faculty_id": faculty["faculty_id"]},
-                    {"$set": {"openalex_projects": clean_projects}}
-                )
-                updated_count += 1
-                logging.info(f"Updated {raw_name} with {len(clean_projects)} publications.")
-            else:
-                logging.info(f"No VIT-AP publications found for {raw_name}")
-                skipped_count += 1
-
-        except Exception as e:
-            logging.error(f"Error processing faculty {faculty.get('name')}: {e}")
-            failed_count += 1
-
-    logging.info(f"OpenAlex Sync completed. Updated: {updated_count}, Skipped: {skipped_count}, Failed: {failed_count}")
-    
-    try:
-        recommender = FacultyRecommender.get_instance()
-        if updated_count > 0:
-           fresh_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
-           loop = asyncio.get_event_loop()
-           await loop.run_in_executor(None, recommender.sync_all_faculty, fresh_faculty)
-    except Exception as e:
-        logging.error(f"Vector sync after OpenAlex failed: {e}")
-
+@api_router.post("/admin/sync-website")
+async def sync_website_data(current_user: User = Depends(get_current_user)):
+    if not current_user.is_admin: raise HTTPException(status_code=403, detail="Admin access required")
+    result = await perform_csv_sync_and_db_update()
+    if result.get("status") == "failed": raise HTTPException(status_code=500, detail="Sync failed")
     return {
-        "message": "Sync completed",
-        "total_processed": len(all_faculty_data),
-        "updated_count": updated_count,
-        "skipped_count": skipped_count,
-        "failed_count": failed_count
+        "message": "Sync Completed", 
+        "new_count": result.get("new_count"), 
+        "missing_count": result.get("missing_count"),
+        "updated_count": result.get("updated_count")
     }
 
 @api_router.get("/rankings")
@@ -1635,4 +1768,8 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    scheduler.shutdown()
     client.close()
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

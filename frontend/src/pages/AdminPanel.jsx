@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, Plus, Edit, Trash, Save, X, Database } from 'lucide-react';
+import { ArrowLeft, Plus, Edit, Trash, Save, X, Database, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -19,15 +19,7 @@ const API = `${BACKEND_URL}/api`;
 
 axios.defaults.withCredentials = true;
 
-const DEPARTMENTS = [
-  'SCOPE',
-  'SENSE',
-  'SMEC',
-  'SAS',
-  'VSB',
-  'VSL',
-  'VISH'
-];
+const DEPARTMENTS = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH'];
 
 export default function AdminPanel({ user }) {
   const navigate = useNavigate();
@@ -36,7 +28,8 @@ export default function AdminPanel({ user }) {
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingFaculty, setEditingFaculty] = useState(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingOpenAlex, setIsSyncingOpenAlex] = useState(false);
+  const [isSyncingWebsite, setIsSyncingWebsite] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     department: 'SCOPE',
@@ -70,19 +63,35 @@ export default function AdminPanel({ user }) {
   };
 
   const handleSyncOpenAlex = async () => {
-    const confirm = window.confirm("This will update all faculty profiles with OpenAlex project data. It may take a moment. Continue?");
+    const confirm = window.confirm("This will update all faculty profiles with OpenAlex project data. Continue?");
     if (!confirm) return;
-
-    setIsSyncing(true);
+    setIsSyncingOpenAlex(true);
     try {
       const response = await axios.post(`${API}/admin/sync-openalex`);
-      toast.success(`Sync Completed! Updated: ${response.data.updated_count}, Failed: ${response.data.failed_count}`);
+      toast.success(`OpenAlex Sync process initiated.`);
+      loadFaculty();
+
+    } catch (error) {
+      console.error('Sync error:', error);
+      toast.error('Failed to sync OpenAlex data.');
+    } finally {
+      setIsSyncingOpenAlex(false);
+    }
+  };
+
+  const handleSyncWebsite = async () => {
+    const confirm = window.confirm("This will sync faculty data with the VIT-AP website. New faculty will be added and missing faculty will be reported. Continue?");
+    if (!confirm) return;
+    setIsSyncingWebsite(true);
+    try {
+      const response = await axios.post(`${API}/admin/sync-website`);
+      toast.success(`Sync Completed! New: ${response.data.new_count}, Missing: ${response.data.missing_count}`);
       loadFaculty();
     } catch (error) {
       console.error('Sync error:', error);
-      toast.error('Failed to sync OpenAlex data. Check console.');
+      toast.error('Failed to sync Website data.');
     } finally {
-      setIsSyncing(false);
+      setIsSyncingWebsite(false);
     }
   };
 
@@ -176,17 +185,28 @@ export default function AdminPanel({ user }) {
           Back to Dashboard
         </Button>
 
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
           <h1 className="text-4xl font-bold gradient-text text-slate-900 dark:text-slate-100" data-testid="admin-header">Faculty</h1>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+
+            <Button
+              onClick={handleSyncWebsite}
+              disabled={isSyncingWebsite}
+              variant="outline"
+              className="border-green-500 text-green-600 hover:bg-green-50 dark:text-green-400 dark:border-green-600 dark:hover:bg-green-900"
+            >
+              <RefreshCw className={`w-4 h-4 mr-2 ${isSyncingWebsite ? 'animate-spin' : ''}`} />
+              {isSyncingWebsite ? 'Syncing...' : 'Sync Website Data'}
+            </Button>
+
             <Button
               onClick={handleSyncOpenAlex}
-              disabled={isSyncing}
+              disabled={isSyncingOpenAlex}
               variant="outline"
               className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:border-blue-600 dark:hover:bg-blue-900"
             >
               <Database className="w-4 h-4 mr-2" />
-              {isSyncing ? 'Syncing...' : 'Sync OpenAlex Data'}
+              {isSyncingOpenAlex ? 'Syncing...' : 'Sync OpenAlex Data'}
             </Button>
 
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -310,7 +330,7 @@ export default function AdminPanel({ user }) {
         ) : faculty.length === 0 ? (
           <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
             <p className="text-center text-slate-600 dark:text-slate-400" data-testid="no-faculty-message">
-              No faculty members yet. Click "Add Faculty" to get started.
+              No faculty members yet. Click "Add Faculty" or "Sync Website Data" to get started.
             </p>
           </Card>
         ) : (
