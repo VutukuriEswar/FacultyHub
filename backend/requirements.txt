@@ -23,3 +23,9 @@ bs4
 rank_bm25
 selenium
 webdriver_manager
+jupyter
+tensorflow
+tf-keras
+scikit-learn
+matplotlib
+numpy
