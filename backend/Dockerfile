@@ -23,6 +23,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download NLTK data
+RUN python -m nltk.downloader punkt stopwords punkt_tab
+
+
 # Copy the rest of the backend files
 COPY . .
 

@@ -15,9 +15,12 @@ import nltk
 
 try:
     nltk.data.find('tokenizers/punkt')
-except nltk.downloader.DownloadError:
+    nltk.data.find('tokenizers/punkt_tab')
+except (LookupError, Exception):
     nltk.download('punkt', quiet=True)
     nltk.download('stopwords', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
+
 
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
