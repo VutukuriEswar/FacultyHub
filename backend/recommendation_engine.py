@@ -50,19 +50,25 @@ class FacultyRecommender:
         
         logging.info(f"Initializing FacultyRecommender with Hybrid Search (BM25 + Vector)...")
         try:
+            logging.info(f"Loading Embedding model: {self.model_name}...")
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=self.model_name,
                 model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
+            logging.info("Embedding model loaded.")
             
+            logging.info(f"Connecting to ChromaDB at {self.persist_dir}...")
             self.vector_store = Chroma(
                 persist_directory=self.persist_dir,
                 embedding_function=self.embeddings,
                 collection_name=COLLECTION_NAME
             )
+            logging.info("Vector Store connected.")
             
+            logging.info("Loading Reranker model (cross-encoder/ms-marco-MiniLM-L-6-v2)...")
             self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+            logging.info("Reranker model loaded.")
             
             self.text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=800,

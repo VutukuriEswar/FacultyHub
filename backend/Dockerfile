@@ -41,4 +41,6 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=10 --start-period=120s \
 
 
 # Start the application using uvicorn directly for better port detection
-CMD uvicorn server:socket_app --host 0.0.0.0 --port $PORT
+# Start the application using a shell to ensure $PORT is expanded
+CMD ["sh", "-c", "uvicorn server:socket_app --host 0.0.0.0 --port ${PORT:-10000}"]
+

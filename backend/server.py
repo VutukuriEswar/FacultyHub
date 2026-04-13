@@ -818,89 +818,90 @@ async def perform_sync_openalex():
         logging.error(f"Vector sync after OpenAlex failed: {e}")
 
 @app.on_event("startup")
-async def startup_event():
-    logging.info("Checking database for faculty data...")
-    
-    profanity.load_censor_words()
-    logging.info("Profanity filter initialized.")
-
-    count = await db.faculty.count_documents({})
-    
-    if count == 0:
-        logging.info("Database is empty. Checking for CSV data...")
-        csv_data = load_faculty_from_csv()
-        if csv_data:
-            logging.info(f"Found {len(csv_data)} records in CSV. Importing...")
-            await db.faculty.insert_many(csv_data)
-        else:
-            logging.info("No CSV found. Falling back to Demo Data.")
-            demo_data = get_demo_faculty()
-            await db.faculty.insert_many(demo_data)
-    else:
-        logging.info(f"Database already contains {count} faculty records.")
-
-
-
-    logging.info("Initializing Vector Store...")
+async def run_initialization():
+    global _startup_complete
     try:
+        logging.info("Starting background initialization...")
+        
+        profanity.load_censor_words()
+        logging.info("Profanity filter initialized.")
+
+        count = await db.faculty.count_documents({})
+        
+        if count == 0:
+            logging.info("Database is empty. Checking for CSV data...")
+            csv_data = load_faculty_from_csv()
+            if csv_data:
+                logging.info(f"Found {len(csv_data)} records in CSV. Importing...")
+                await db.faculty.insert_many(csv_data)
+            else:
+                logging.info("No CSV found. Falling back to Demo Data.")
+                demo_data = get_demo_faculty()
+                await db.faculty.insert_many(demo_data)
+        else:
+            logging.info(f"Database contains {count} faculty records. Model loading will follow...")
+
+        logging.info("Initializing Vector Store (Loading ML Models)...")
         loop = asyncio.get_event_loop()
         def init_recommender_sync():
             return FacultyRecommender.get_instance()
+        
         recommender = await loop.run_in_executor(None, init_recommender_sync)
         all_faculty = await db.faculty.find({}, {"_id": 0}).to_list(None)
+        
         logging.info("Syncing faculty to vector store...")
         await loop.run_in_executor(None, recommender.sync_all_faculty, all_faculty)
         logging.info("Vector Store sync finished.")
+
+        logging.info("Initializing Schedulers...")
+        scheduler.add_job(perform_csv_sync_and_db_update, 'interval', hours=3, id='csv_sync')
+        scheduler.add_job(perform_sync_openalex, 'interval', hours=2, id='openalex_sync')
+        scheduler.start()
+
+        logging.info("Checking for seeded users...")
+        users_cursor = db.users.find({})
+        async for user_doc in users_cursor:
+            update_data = {}
+            if not user_doc.get('anonymous_id'):
+                new_id = str(random.randint(1000, 9999))
+                update_data['anonymous_id'] = new_id
+                update_data['anonymous_chat_id'] = new_id
+                update_data['anonymous_comment_id'] = new_id
+            elif user_doc.get('anonymous_chat_id') != user_doc.get('anonymous_id'):
+                 update_data['anonymous_chat_id'] = user_doc.get('anonymous_id')
+            elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
+                 update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
+            if 'blocked' not in user_doc: update_data['blocked'] = False
+            if 'theme_preference' not in user_doc: update_data['theme_preference'] = 'light'
+            if update_data: await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
+
+        admin_exists = await db.users.find_one({"is_admin": True})
+        if not admin_exists:
+            if ADMIN_ENV_EMAIL and ADMIN_ENV_PASSWORD:
+                logging.info(f"Creating Admin user: {ADMIN_ENV_EMAIL}")
+                unified_id = str(random.randint(1000, 9999))
+                await db.users.insert_one({
+                    "user_id": f"user_admin_{uuid.uuid4().hex[:12]}",
+                    "email": ADMIN_ENV_EMAIL,
+                    "name": "System Administrator",
+                    "password_hash": get_password_hash(ADMIN_ENV_PASSWORD),
+                    "is_admin": True, "blocked": False, "preferences": [], "ai_interests": [],
+                    "created_at": datetime.now(timezone.utc),
+                    "anonymous_id": unified_id, "anonymous_chat_id": unified_id, "anonymous_comment_id": unified_id,
+                    "theme_preference": "light"
+                })
+
+        _startup_complete = True
+        logging.info("Startup complete. Server ready and fully initialized.")
     except Exception as e:
-        logging.error(f"Failed to initialize Vector Store: {e}")
+        logging.error(f"Critical initialization error: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
 
-    logging.info("Initializing Schedulers...")
-    scheduler.add_job(perform_csv_sync_and_db_update, 'interval', hours=3, id='csv_sync')
-    scheduler.add_job(perform_sync_openalex, 'interval', hours=2, id='openalex_sync')
-    scheduler.start()
-
-    logging.info("Checking for seeded users...")
-    users_cursor = db.users.find({})
-    async for user_doc in users_cursor:
-        update_data = {}
-        if not user_doc.get('anonymous_id'):
-            new_id = str(random.randint(1000, 9999))
-            update_data['anonymous_id'] = new_id
-            update_data['anonymous_chat_id'] = new_id
-            update_data['anonymous_comment_id'] = new_id
-        elif user_doc.get('anonymous_chat_id') != user_doc.get('anonymous_id'):
-             update_data['anonymous_chat_id'] = user_doc.get('anonymous_id')
-        elif user_doc.get('anonymous_comment_id') != user_doc.get('anonymous_id'):
-             update_data['anonymous_comment_id'] = user_doc.get('anonymous_id')
-        if 'blocked' not in user_doc: update_data['blocked'] = False
-        if 'theme_preference' not in user_doc: update_data['theme_preference'] = 'light'
-        if update_data: await db.users.update_one({'_id': user_doc['_id']}, {'$set': update_data})
-
-    admin_exists = await db.users.find_one({"is_admin": True})
-    if not admin_exists:
-        if ADMIN_ENV_EMAIL and ADMIN_ENV_PASSWORD:
-            logging.info(f"Creating Admin user from .env: {ADMIN_ENV_EMAIL}")
-            unified_id = str(random.randint(1000, 9999))
-            await db.users.insert_one({
-                "user_id": f"user_admin_{uuid.uuid4().hex[:12]}",
-                "email": ADMIN_ENV_EMAIL,
-                "name": "System Administrator",
-                "password_hash": get_password_hash(ADMIN_ENV_PASSWORD),
-                "is_admin": True, "blocked": False, "preferences": [], "ai_interests": [],
-                "created_at": datetime.now(timezone.utc),
-                "anonymous_id": unified_id, "anonymous_chat_id": unified_id, "anonymous_comment_id": unified_id,
-                "theme_preference": "light"
-            })
-        else:
-            logging.warning("ADMIN_EMAIL and ADMIN_PASSWORD not found in .env. No admin created.")
-    
-    global _startup_complete
-    _startup_complete = True
-    logging.info("Startup complete. Server ready.")
-
-    
-
-
+@app.on_event("startup")
+async def startup_event():
+    logging.info("Server process starting. Port binding should occur now.")
+    asyncio.create_task(run_initialization())
 
 async def get_current_user(request: Request, session_token: Optional[str] = Cookie(None)) -> User:
     token = session_token or request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -1784,5 +1785,6 @@ async def shutdown_db_client():
     client.close()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 10000 if "RENDER" in os.environ else 8000))
+    logging.info(f"Starting server on port {port}...")
     uvicorn.run("server:socket_app", host="0.0.0.0", port=port, log_level="info")
