@@ -1771,4 +1771,5 @@ async def shutdown_db_client():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Serve socket_app (ASGI) which includes both FastAPI and Socket.IO
+    uvicorn.run("server:socket_app", host="0.0.0.0", port=port, log_level="info")

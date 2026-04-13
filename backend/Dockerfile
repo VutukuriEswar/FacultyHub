@@ -29,5 +29,6 @@ COPY . .
 # Expose the default port (Render will override this with the PORT env var)
 EXPOSE 8000
 
-# Start the application
-CMD ["python", "server.py"]
+# Start the application using uvicorn directly for better port detection
+CMD uvicorn server:socket_app --host 0.0.0.0 --port $PORT
+
