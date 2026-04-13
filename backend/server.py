@@ -891,18 +891,8 @@ async def startup_event():
         else:
             logging.warning("ADMIN_EMAIL and ADMIN_PASSWORD not found in .env. No admin created.")
     
-    demo_email = "demo@vitapstudent.ac.in"
-    demo_doc = await db.users.find_one({"email": demo_email})
-    if not demo_doc:
-        logging.info(f"Creating Demo user: {demo_email}")
-        unified_id = str(random.randint(1000, 9999))
-        await db.users.insert_one({
-            "user_id": f"user_demo_{uuid.uuid4().hex[:12]}", "email": demo_email, "name": "Demo User",
-            "password_hash": get_password_hash("Demo123"), "is_admin": False, "blocked": False,
-            "preferences": [], "ai_interests": [], "created_at": datetime.now(timezone.utc),
-            "anonymous_id": unified_id, "anonymous_chat_id": unified_id, "anonymous_comment_id": unified_id,
-            "theme_preference": "light"
-        })
+
+
 
 async def get_current_user(request: Request, session_token: Optional[str] = Cookie(None)) -> User:
     token = session_token or request.headers.get("Authorization", "").replace("Bearer ", "")

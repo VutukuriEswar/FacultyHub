@@ -157,25 +157,8 @@ export default function LandingPage() {
             )}
           </div>
 
-          {isLogin && (
-            <div className="mt-6 p-4 bg-muted/50 rounded-lg border border-dashed border-border">
-              <h4 className="font-semibold text-sm mb-3 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                Demo Account
-              </h4>
-              <div className="space-y-3 text-xs">
-                <div className="bg-white p-2 rounded border">
-                  <p className="font-medium text-foreground mb-1">Student User</p>
-                  <p className="text-muted-foreground">
-                    Email: <span className="font-mono">demo@vitapstudent.ac.in</span>
-                  </p>
-                  <p className="text-muted-foreground">
-                    Pass: <span className="font-mono">Demo123</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
+
+
         </CardContent>
       </Card>
     </div>
