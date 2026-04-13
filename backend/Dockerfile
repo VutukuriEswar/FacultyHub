@@ -26,6 +26,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-download NLTK data
 RUN python -m nltk.downloader punkt stopwords punkt_tab
 
+# Pre-download HuggingFace models so they're cached in the image
+RUN python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; print('Caching all-MiniLM-L6-v2...'); SentenceTransformer('all-MiniLM-L6-v2'); print('Caching cross-encoder/ms-marco-MiniLM-L-6-v2...'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512); print('Models cached.')"
 
 # Copy the rest of the backend files
 COPY . .
@@ -33,6 +35,10 @@ COPY . .
 # Expose the default port (Render will override this with the PORT env var)
 EXPOSE 8000
 
+# Healthcheck to verify the app is ready
+HEALTHCHECK --interval=10s --timeout=5s --retries=10 --start-period=120s \
+  CMD curl -f http://localhost:${PORT:-8000}/api/health || exit 1
+
+
 # Start the application using uvicorn directly for better port detection
 CMD uvicorn server:socket_app --host 0.0.0.0 --port $PORT
-

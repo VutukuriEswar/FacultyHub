@@ -95,6 +95,8 @@ socket_app = socketio.ASGIApp(sio, app)
 scheduler = AsyncIOScheduler()
 
 api_router = APIRouter(prefix="/api")
+_startup_complete = False
+
 
 VIT_INSTITUTION_LINEAGE = "i4401726783"
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
@@ -837,6 +839,8 @@ async def startup_event():
     else:
         logging.info(f"Database already contains {count} faculty records.")
 
+
+
     logging.info("Initializing Vector Store...")
     try:
         loop = asyncio.get_event_loop()
@@ -889,6 +893,11 @@ async def startup_event():
             })
         else:
             logging.warning("ADMIN_EMAIL and ADMIN_PASSWORD not found in .env. No admin created.")
+    
+    global _startup_complete
+    _startup_complete = True
+    logging.info("Startup complete. Server ready.")
+
     
 
 
@@ -1747,6 +1756,13 @@ async def get_rankings(department: Optional[str] = None, category: str = "overal
     return rankings
 
 app.include_router(api_router)
+
+@api_router.get("/health")
+async def health_check():
+    if not _startup_complete:
+        raise HTTPException(status_code=503, detail="Starting up")
+    return Response(content="ok", media_type="text/plain")
+
 
 app.add_middleware(
     CORSMiddleware,
