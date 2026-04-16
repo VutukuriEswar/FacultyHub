@@ -818,8 +818,9 @@ async def run_initialization():
         scheduler.add_job(perform_csv_sync_and_db_update, 'interval', hours=3, id='csv_sync', replace_existing=True)
         scheduler.add_job(perform_sync_openalex, 'interval', hours=2, id='openalex_sync', replace_existing=True)
         try:
-            scheduler.start()
-        except RuntimeError:
+            if not scheduler.running:
+                scheduler.start()
+        except Exception:
             pass
 
         logging.info("Checking for seeded users...")
@@ -1720,13 +1721,14 @@ async def get_rankings(department: Optional[str] = None, category: str = "overal
     
     return rankings
 
-app.include_router(api_router)
-
-@api_router.get("/health")
+@app.get("/health")
+@app.get("/api/health")
 async def health_check():
     if not _startup_complete:
         raise HTTPException(status_code=503, detail="Starting up")
     return Response(content="ok", media_type="text/plain")
+
+app.include_router(api_router)
 
 
 app.add_middleware(
