@@ -372,44 +372,7 @@ def load_faculty_from_csv():
         logging.error(f"Error loading CSV: {e}")
         return None
 
-def get_demo_faculty():
-    departments = ['SCOPE', 'SENSE', 'SMEC', 'SAS', 'VSB', 'VSL', 'VISH']
-    base_data = {
-        'created_at': datetime.now(timezone.utc),
-        'avg_ratings': {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0},
-        'rating_counts': {"teaching": 0, "attendance": 0, "doubt_clarification": 0, "overall": 0}
-    }
-    
-    def gen_dept_faculty(dept, names, designations):
-        facs = []
-        for i, name in enumerate(names):
-            facs.append({
-                "faculty_id": f"demo_{dept}_{i}",
-                "name": name,
-                "department": dept,
-                "designation": designations[i % len(designations)],
-                "image_url": f"https://randomuser.me/api/portraits/{'men' if i % 2 == 0 else 'women'}/{i+10}.jpg",
-                "scholar_profile": None,
-                "publications": [],
-                "research_interests": f"Research in {dept}",
-                "Specialisation": f"AI & ML in {dept}",
-                "Office Address": f"Block {i+1}, Room {100+i}",
-                "Email": f"{name.split(' ')[1].lower()}@vitapstudent.ac.in",
-                "Phone": f"+91 98765 432{i}",
-                "openalex_projects": [],
-                **base_data
-            })
-        return facs
 
-    all_faculty = []
-    all_faculty.extend(gen_dept_faculty('SCOPE', ["Dr. Ada Lovelace", "Prof. Alan Turing", "Dr. Grace Hopper", "Prof. Donald Knuth", "Dr. Linus Torvalds", "Prof. Tim Berners-Lee", "Dr. Margaret Hamilton", "Prof. Dennis Ritchie", "Dr. Sophie Wilson", "Prof. Guido van Rossum"], ["Professor", "Associate Professor", "Assistant Professor", "HOD"]))
-    all_faculty.extend(gen_dept_faculty('SENSE', ["Dr. Nikola Tesla", "Prof. Michael Faraday", "Dr. Guglielmo Marconi", "Prof. Samuel Morse", "Dr. Claude Shannon", "Prof. Jack Kilby", "Dr. Robert Noyce", "Prof. Gordon Moore", "Dr. Andrew Grove", "Prof. Robert Hall"], ["Dean", "Professor", "Associate Professor", "Assistant Professor"]))
-    all_faculty.extend(gen_dept_faculty('SMEC', ["Dr. Henry Ford", "Prof. Karl Benz", "Prof. Rudolf Diesel", "Dr. James Watt", "Prof. George Stephenson", "Dr. Isambard Brunel", "Prof. Nikolaus Otto", "Dr. Elijah McCoy", "Prof. Gottlieb Daimler", "Dr. Charles Kettering"], ["Professor", "HOD", "Associate Professor", "Assistant Professor"]))
-    all_faculty.extend(gen_dept_faculty('SAS', ["Dr. Marie Curie", "Prof. Albert Einstein", "Dr. Isaac Newton", "Prof. Galileo Galilei", "Dr. Richard Feynman", "Prof. Stephen Hawking", "Dr. Neil deGrasse Tyson", "Prof. Rosalind Franklin", "Dr. Dmitri Mendeleev", "Prof. Louis Pasteur"], ["Senior Professor", "Professor", "Associate Professor", "Assistant Professor"]))
-    all_faculty.extend(gen_dept_faculty('VSB', ["Dr. Peter Drucker", "Prof. Adam Smith", "Dr. Warren Buffett", "Prof. John Keynes", "Dr. Michael Porter", "Prof. Philip Kotler", "Dr. Jack Welch", "Prof. Henry Mintzberg", "Dr. Jim Collins", "Prof. Clayton Christensen"], ["Professor", "Dean", "Associate Professor", "Assistant Professor"]))
-    all_faculty.extend(gen_dept_faculty('VSL', ["Dr. Ruth Bader Ginsburg", "Prof. Oliver Wendell Holmes", "Dr. Thurgood Marshall", "Prof. Sandra Day O'Connor", "Dr. William Blackstone", "Prof. Hugo Black", "Dr. Learned Hand", "Prof. Benjamin Cardozo", "Dr. John Marshall", "Prof. Antonin Scalia"], ["Senior Advocate", "Professor", "Associate Professor", "HOD"]))
-    all_faculty.extend(gen_dept_faculty('VISH', ["Dr. Sigmund Freud", "Prof. Carl Jung", "Dr. B.F. Skinner", "Prof. Jean Piaget", "Dr. Noam Chomsky", "Prof. Jane Goodall", "Dr. Margaret Mead", "Prof. Sigmund Freud", "Dr. Abraham Maslow", "Prof. Erik Erikson"], ["Professor", "Assistant Professor", "Associate Professor", "Dean"]))
-    return all_faculty
 
 SELECTORS = {
     "card_link": "//a[contains(@href, '/faculty/')]",
@@ -835,9 +798,7 @@ async def run_initialization():
                 logging.info(f"Found {len(csv_data)} records in CSV. Importing...")
                 await db.faculty.insert_many(csv_data)
             else:
-                logging.info("No CSV found. Falling back to Demo Data.")
-                demo_data = get_demo_faculty()
-                await db.faculty.insert_many(demo_data)
+                logging.info("No CSV found. Database will remain empty until sync.")
         else:
             logging.info(f"Database contains {count} faculty records. Model loading will follow...")
 
