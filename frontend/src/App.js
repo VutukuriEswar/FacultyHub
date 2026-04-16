@@ -18,6 +18,15 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 axios.defaults.withCredentials = true;
+
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem('session_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 const ThemeContext = createContext();
 
 export const useTheme = () => useContext(ThemeContext);

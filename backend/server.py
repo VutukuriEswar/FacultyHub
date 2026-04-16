@@ -951,7 +951,7 @@ async def login_user(response: Response, login_data: UserLogin):
     if isinstance(user_doc["created_at"], str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     
-    return User(**user_doc)
+    return {"user": User(**user_doc), "token": session_token}
 
 @api_router.get("/auth/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)):

@@ -62,6 +62,7 @@ function AdminView({ user }) {
   const handleLogout = async () => {
     try {
       await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      localStorage.removeItem('session_token');
       toast.success('Logged out successfully');
       navigate('/');
     } catch (error) {
@@ -347,6 +348,7 @@ function StudentDashboard({ user }) {
   const handleLogout = async () => {
     try {
       await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      localStorage.removeItem('session_token');
       toast.success('Logged out successfully');
       navigate('/');
     } catch (error) {

@@ -31,7 +31,10 @@ export default function LandingPage() {
     setIsLoading(true);
     try {
       const response = await axios.post(`${API}/auth/login`, { email, password });
-      const user = response.data;
+      const { user, token } = response.data;
+      if (token) {
+        localStorage.setItem('session_token', token);
+      }
       toast.success(`Welcome, ${user.name}!`);
       navigate('/dashboard', { state: { user }, replace: true });
     } catch (error) {
