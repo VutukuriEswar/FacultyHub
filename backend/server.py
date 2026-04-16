@@ -937,12 +937,13 @@ async def login_user(response: Response, login_data: UserLogin):
         "created_at": datetime.now(timezone.utc)
     })
     
+    is_production = "RENDER" in os.environ
     response.set_cookie(
         key="session_token",
         value=session_token,
         httponly=True,
-        secure=False,
-        samesite="lax",
+        secure=is_production,
+        samesite="none" if is_production else "lax",
         max_age=7*24*60*60,
         path="/"
     )
@@ -961,7 +962,13 @@ async def logout(response: Response, session_token: Optional[str] = Cookie(None)
     if session_token:
         await db.user_sessions.delete_many({"session_token": session_token})
     
-    response.delete_cookie(key="session_token", path="/")
+    is_production = "RENDER" in os.environ
+    response.delete_cookie(
+        key="session_token", 
+        path="/",
+        secure=is_production,
+        samesite="none" if is_production else "lax"
+    )
     return {"message": "Logged out successfully"}
 
 @api_router.patch("/users/me", response_model=User)
