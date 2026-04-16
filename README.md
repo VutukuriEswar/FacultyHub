@@ -138,7 +138,7 @@ yarn start
 
 **Database Initialization:**
 - On startup, if the database is empty, the system checks for `faculty_data.csv`.
-- If no CSV is found, it generates Demo Data for testing.
+- If no CSV is found, it starts the system with an empty database.
 - Admin and Demo users are automatically seeded based on `.env` variables.
 
 **OpenAlex Integration:**
@@ -153,4 +153,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](./LICEN
 
 ## Acknowledgments
 
-Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, and the Socket.IO community for real-time capabilities. Special thanks to the Selenium project for enabling automated data freshness.
+Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, Render for Deployment of Backend & Frontend, and the Socket.IO community for real-time capabilities. Special thanks to the Selenium project for enabling automated data freshness.
