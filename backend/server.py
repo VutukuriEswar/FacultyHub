@@ -815,9 +815,12 @@ async def run_initialization():
         logging.info("Vector Store sync finished.")
 
         logging.info("Initializing Schedulers...")
-        scheduler.add_job(perform_csv_sync_and_db_update, 'interval', hours=3, id='csv_sync')
-        scheduler.add_job(perform_sync_openalex, 'interval', hours=2, id='openalex_sync')
-        scheduler.start()
+        scheduler.add_job(perform_csv_sync_and_db_update, 'interval', hours=3, id='csv_sync', replace_existing=True)
+        scheduler.add_job(perform_sync_openalex, 'interval', hours=2, id='openalex_sync', replace_existing=True)
+        try:
+            scheduler.start()
+        except RuntimeError:
+            pass
 
         logging.info("Checking for seeded users...")
         users_cursor = db.users.find({})

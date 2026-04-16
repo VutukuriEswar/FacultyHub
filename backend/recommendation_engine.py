@@ -175,9 +175,13 @@ class FacultyRecommender:
                 self.vector_store.add_documents(documents=batch_docs, ids=batch_ids)
             
             logging.info("Initializing BM25 Index for Hybrid Search...")
-            tokenized_corpus = [self._preprocess_text(doc.page_content) for doc in all_docs]
-            self.bm25 = BM25Okapi(tokenized_corpus)
-            self.bm25_docs = all_docs
+            if all_docs:
+                tokenized_corpus = [self._preprocess_text(doc.page_content) for doc in all_docs]
+                self.bm25 = BM25Okapi(tokenized_corpus)
+                self.bm25_docs = all_docs
+            else:
+                self.bm25 = None
+                self.bm25_docs = []
             
             logging.info("Vector and BM25 sync complete.")
             return True
