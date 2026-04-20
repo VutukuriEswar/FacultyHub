@@ -40,7 +40,5 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=10 --start-period=120s \
   CMD curl -f http://localhost:${PORT:-8000}/api/health || exit 1
 
 
-# Start the application using uvicorn directly for better port detection
-# Start the application using a shell to ensure $PORT is expanded
-CMD ["sh", "-c", "uvicorn server:socket_app --host 0.0.0.0 --port ${PORT:-10000}"]
-
+# Start the application using the Python script which handles the port correctly
+CMD ["python", "server.py"]
