@@ -10,6 +10,8 @@ import requests
 import smtplib
 import bcrypt
 import socketio
+import firebase_admin
+from firebase_admin import credentials, auth as fb_auth
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
@@ -35,6 +37,19 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 import uvicorn
 from recommendation_engine import FacultyRecommender
+
+_FIREBASE_PROJECT_ID = "facultyhub-10942"
+
+_firebase_initialized = False
+def _ensure_firebase():
+    global _firebase_initialized
+    if not _firebase_initialized:
+        try:
+            firebase_admin.get_app()
+        except ValueError:
+            project_id = os.environ.get("FIREBASE_PROJECT_ID", _FIREBASE_PROJECT_ID)
+            firebase_admin.initialize_app(options={"projectId": project_id})
+        _firebase_initialized = True
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -123,6 +138,10 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str
     name: str
+    otp: str
+
+class SendOTPRequest(BaseModel):
+    email: EmailStr
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -134,6 +153,9 @@ class UserUpdate(BaseModel):
     preferences: Optional[List[str]] = None
     ai_interests: Optional[List[str]] = None
     theme_preference: Optional[str] = None
+
+class GoogleAuthRequest(BaseModel):
+    id_token: str
 
 class UserAdminUpdate(BaseModel):
     is_admin: Optional[bool] = None
@@ -883,6 +905,42 @@ async def get_current_user(request: Request, session_token: Optional[str] = Cook
     if isinstance(user_doc["created_at"], str): user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
     return User(**user_doc)
 
+@api_router.post("/auth/send-otp")
+async def send_otp(request: SendOTPRequest):
+    if not request.email.endswith("@vitapstudent.ac.in"):
+        raise HTTPException(status_code=400, detail="Registration restricted to @vitapstudent.ac.in emails")
+        
+    existing_user = await db.users.find_one({"email": request.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+        
+    otp = str(random.randint(100000, 999999))
+    expiration = datetime.now(timezone.utc) + timedelta(minutes=10)
+    
+    await db.otps.update_one(
+        {"email": request.email},
+        {"$set": {"otp": otp, "expires_at": expiration}},
+        upsert=True
+    )
+    
+    subject = "Your FacultyHub Verification Code"
+    body = f"""
+    <html>
+        <body>
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+                <h3 style="color: #0f766e;">Welcome to VIT-AP Faculty Hub!</h3>
+                <p>Your email verification code is:</p>
+                <div style="background-color: #f1f5f9; padding: 16px; font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 4px; border-radius: 8px; margin: 20px 0;">
+                    {otp}
+                </div>
+                <p style="color: #64748b; font-size: 14px;">This code will expire in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
+            </div>
+        </body>
+    </html>
+    """
+    await send_email_async(request.email, subject, body)
+    return {"message": "OTP sent successfully"}
+
 @api_router.post("/auth/register")
 async def register_user(user_data: UserRegister):
     if not user_data.email.endswith("@vitapstudent.ac.in"):
@@ -891,6 +949,17 @@ async def register_user(user_data: UserRegister):
     existing_user = await db.users.find_one({"email": user_data.email})
     if existing_user:
         raise HTTPException(status_code=400, detail="User already exists")
+
+    otp_record = await db.otps.find_one({"email": user_data.email, "otp": user_data.otp})
+    if not otp_record:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+        
+    expires_at = otp_record.get("expires_at")
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="OTP has expired. Please request a new one.")
 
     user_id = f"user_{uuid.uuid4().hex[:12]}"
     unified_id = str(random.randint(1000, 9999))
@@ -913,6 +982,7 @@ async def register_user(user_data: UserRegister):
     }
     
     await db.users.insert_one(new_user)
+    await db.otps.delete_one({"email": user_data.email})
     return {"message": "User registered successfully", "user_id": user_id}
 
 @api_router.post("/auth/login")
@@ -970,6 +1040,76 @@ async def logout(response: Response, session_token: Optional[str] = Cookie(None)
         samesite="none" if is_production else "lax"
     )
     return {"message": "Logged out successfully"}
+
+@api_router.post("/auth/google")
+async def google_auth(response: Response, body: GoogleAuthRequest):
+    _ensure_firebase()
+    try:
+        decoded = fb_auth.verify_id_token(body.id_token)
+    except Exception as e:
+        logging.error(f"Firebase token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    email: str = decoded.get("email", "")
+    if not email:
+        raise HTTPException(status_code=400, detail="No email in Google token")
+
+    if not email.endswith("@vitapstudent.ac.in"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only @vitapstudent.ac.in Google accounts are allowed."
+        )
+
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+
+    if user_doc:
+        if user_doc.get("blocked", False):
+            raise HTTPException(status_code=403, detail="Account blocked")
+    else:
+        # First-time Google sign-in → create the user
+        unified_id = str(random.randint(1000, 9999))
+        display_name = decoded.get("name") or email.split("@")[0]
+        picture = decoded.get("picture")
+        user_doc = {
+            "user_id": f"user_{uuid.uuid4().hex[:12]}",
+            "email": email,
+            "name": display_name,
+            "picture": picture,
+            "is_admin": False,
+            "blocked": False,
+            "preferences": [],
+            "ai_interests": [],
+            "created_at": datetime.now(timezone.utc),
+            "anonymous_id": unified_id,
+            "anonymous_chat_id": unified_id,
+            "anonymous_comment_id": unified_id,
+            "theme_preference": "light"
+        }
+        await db.users.insert_one(dict(user_doc))
+
+    session_token = f"sess_{uuid.uuid4().hex}"
+    await db.user_sessions.insert_one({
+        "user_id": user_doc["user_id"],
+        "session_token": session_token,
+        "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    is_production = "RENDER" in os.environ
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=is_production,
+        samesite="none" if is_production else "lax",
+        max_age=7 * 24 * 60 * 60,
+        path="/"
+    )
+
+    if isinstance(user_doc.get("created_at"), str):
+        user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
+
+    return {"user": User(**user_doc), "token": session_token}
 
 @api_router.patch("/users/me", response_model=User)
 async def update_profile(update: UserUpdate, current_user: User = Depends(get_current_user)):
@@ -1634,10 +1774,14 @@ async def get_recommendations(
                     else:
                         final_reason = "Relevant based on overall profile similarity."
 
+            has_keyword_match = bool(found_in_interests or found_in_projects)
+            match_type = "keyword" if has_keyword_match else "semantic"
+
             recommendations.append({
                 **fac,
                 "compatibility_percentage": round(final_score, 1),
-                "recommendation_reason": final_reason
+                "recommendation_reason": final_reason,
+                "match_type": match_type
             })
     
     elif user_rating_prefs:
@@ -1661,7 +1805,8 @@ async def get_recommendations(
             recommendations.append({
                 **fac,
                 "compatibility_percentage": round(final_score, 1),
-                "recommendation_reason": None
+                "recommendation_reason": None,
+                "match_type": "keyword"
             })
     
     recommendations.sort(key=lambda x: x.get("compatibility_percentage", 0), reverse=True)

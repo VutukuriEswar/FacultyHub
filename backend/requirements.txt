@@ -27,3 +27,4 @@ nltk
 scikit-learn
 matplotlib
 numpy
+firebase_admin

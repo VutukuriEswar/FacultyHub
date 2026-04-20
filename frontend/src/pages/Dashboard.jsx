@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users, Moon, Sun, X, Save } from 'lucide-react';
+import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users, Moon, Sun, X, Save, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -35,6 +35,84 @@ const AI_OPTIONS = [
   { value: 'Blockchain', label: 'Blockchain' }
 ];
 
+// ─── Reusable Faculty Card ──────────────────────────────────────────────────
+function FacultyCard({ faculty, showCompatibilityScore, showRecommendations }) {
+  const navigate = useNavigate();
+  return (
+    <Card
+      key={faculty.faculty_id}
+      className="hover-lift cursor-pointer transition-all relative bg-white dark:bg-slate-900 dark:border-slate-700"
+      onClick={() => navigate(`/faculty/${faculty.faculty_id}`)}
+      data-testid={`faculty-card-${faculty.faculty_id}`}
+    >
+      <CardContent className="p-6">
+        <div className="flex items-start gap-4 mb-4">
+          <Avatar className="w-16 h-16">
+            <AvatarImage src={faculty.image_url} />
+            <AvatarFallback>{faculty.name.charAt(0)}</AvatarFallback>
+          </Avatar>
+          <div className="flex-1">
+            <h3 className="font-semibold text-lg text-slate-900 dark:text-slate-100">{faculty.name}</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{faculty.designation}</p>
+            <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
+          </div>
+        </div>
+
+        {showRecommendations && faculty.recommendation_reason && (
+          <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md text-xs">
+            <p className="font-semibold text-blue-900 dark:text-blue-200 mb-1">Why you?</p>
+            <p className="text-blue-800 dark:text-blue-300 leading-relaxed">{faculty.recommendation_reason}</p>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-500 dark:text-slate-400">Overall Rating</span>
+            <div className="flex items-center gap-1">
+              <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
+              <span className="font-semibold text-slate-900 dark:text-slate-100">{faculty.avg_ratings.overall.toFixed(1)}</span>
+              <span className="text-xs text-slate-400 dark:text-slate-500">({faculty.rating_counts.overall})</span>
+            </div>
+          </div>
+
+          {showCompatibilityScore && faculty.compatibility_percentage !== undefined && (
+            <div className="mt-3 pt-3 border-t border-border dark:border-slate-700">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-teal-600 dark:text-teal-400">Compatibility</span>
+                <span className="text-lg font-bold text-teal-600 dark:text-teal-400">{faculty.compatibility_percentage}%</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Reusable Faculty Grid ──────────────────────────────────────────────────
+function FacultyGrid({ facultyList, showCompatibilityScore, showRecommendations, emptyMessage }) {
+  if (facultyList.length === 0) {
+    return (
+      <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
+        <p className="text-center text-slate-600 dark:text-slate-400" data-testid="no-results-message">{emptyMessage}</p>
+      </Card>
+    );
+  }
+  return (
+    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {facultyList.map(faculty => (
+        <FacultyCard
+          key={faculty.faculty_id}
+          faculty={faculty}
+          showCompatibilityScore={showCompatibilityScore}
+          showRecommendations={showRecommendations}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Admin View ─────────────────────────────────────────────────────────────
 function AdminView({ user }) {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
@@ -96,8 +174,10 @@ function AdminView({ user }) {
             </div>
 
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" onClick={() => toggleTheme(theme === 'light' ? 'dark' : 'light')} className="text-slate-500 dark:text-slate-300" data-testid="theme-toggle">
-                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-orange-400" />}
+              <Button variant="ghost" size="icon" onClick={() => toggleTheme(theme === 'light' ? 'dark' : 'light')} className="theme-toggle-btn text-slate-500 dark:text-slate-300" data-testid="theme-toggle">
+                <span className="theme-icon-wrap">
+                  {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-orange-400" />}
+                </span>
               </Button>
               <Button variant="ghost" size="icon" onClick={() => navigate('/chats')} className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 relative" data-testid="nav-chats-button">
                 <MessageSquare className="w-5 h-5" />
@@ -356,22 +436,28 @@ function StudentDashboard({ user }) {
     }
   };
 
-  const filteredFaculty = allFaculty.filter(f =>
-    f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    f.department.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const showRecommendations = activeRecSource !== null;
+  const basePool = showRecommendations ? recommendationResults : allFaculty;
+  const filteredPool = searchQuery.trim()
+    ? basePool.filter(f =>
+      f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      f.department.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    : basePool;
 
   const showSearch = searchQuery.length > 0;
-  const showRecommendations = activeRecSource !== null;
 
-  const displayFaculty = showSearch
-    ? filteredFaculty
-    : (showRecommendations ? recommendationResults : allFaculty);
+  const keywordResults = showRecommendations && !showSearch
+    ? filteredPool.filter(f => f.match_type === 'keyword' || !f.match_type)
+    : [];
+  const semanticResults = showRecommendations && !showSearch
+    ? filteredPool.filter(f => f.match_type === 'semantic')
+    : [];
 
   const showCompatibilityScore = showRecommendations;
 
   return (
-    <div className={`min-h-screen transition-colors duration-300 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
+    <div className={`min-h-screen transition-colors duration-500 ${theme === 'light' ? 'bg-gradient-to-br from-teal-50 via-white to-orange-50' : 'bg-slate-950'}`}>
       <header className="border-b border-border bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -392,8 +478,16 @@ function StudentDashboard({ user }) {
             </div>
 
             <div className="flex items-center gap-3">
-              <Button variant="ghost" size="icon" onClick={() => toggleTheme(theme === 'light' ? 'dark' : 'light')} className="text-slate-500 dark:text-slate-300" data-testid="theme-toggle">
-                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-orange-400" />}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => toggleTheme(theme === 'light' ? 'dark' : 'light')}
+                className="theme-toggle-btn text-slate-500 dark:text-slate-300"
+                data-testid="theme-toggle"
+              >
+                <span className="theme-icon-wrap">
+                  {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-orange-400" />}
+                </span>
               </Button>
               <Button variant="ghost" size="icon" onClick={() => navigate('/chats')} className="text-slate-500 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 relative" data-testid="nav-chats-button">
                 <MessageSquare className="w-5 h-5" />
@@ -419,7 +513,7 @@ function StudentDashboard({ user }) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-slate-900 dark:text-slate-100">
               <BotIcon className="w-5 h-5 text-teal-600 dark:text-teal-400" />
-              AI & Research Interests (Temporary Selection)
+              AI &amp; Research Interests (Temporary Selection)
             </CardTitle>
             <p className="text-sm text-slate-600 dark:text-slate-400">
               Select topics for this session. These will persist until you close the tab or clear them.
@@ -488,84 +582,106 @@ function StudentDashboard({ user }) {
         <div className="mb-8">
           <div className="relative max-w-2xl mx-auto">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-            <Input type="text" placeholder="Search faculty by name or department..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-12 h-14 text-lg border-2 dark:bg-slate-900 dark:border-slate-700 dark:text-white" data-testid="search-input" />
+            <Input
+              type="text"
+              placeholder={showRecommendations ? "Search within recommendations..." : "Search faculty by name or department..."}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-12 h-14 text-lg border-2 dark:bg-slate-900 dark:border-slate-700 dark:text-white"
+              data-testid="search-input"
+            />
           </div>
+          {showRecommendations && (
+            <p className="text-center text-xs text-slate-500 dark:text-slate-400 mt-2">
+              {showSearch ? `Searching within ${recommendationResults.length} recommended professors` : 'Showing your personalized recommendations'}
+            </p>
+          )}
         </div>
 
         <div>
-          {showSearch && (
-            <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="search-results-header">
-              Search Results ({filteredFaculty.length})
-            </h2>
-          )}
-
-          {showRecommendations && (
-            <h2 className="text-2xl font-bold mb-4 text-teal-600 dark:text-teal-400" data-testid="recommended-header">
-              Recommendations ({recommendationResults.length})
-            </h2>
-          )}
-
-          {!showSearch && !showRecommendations && (
-            <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="all-faculty-header">
-              All Faculty
-            </h2>
-          )}
-
           {loading ? (
-            <div className="flex justify-center py-20"><div className="animate-spin rounded-full h-12 w-12 border-4 border-teal-600 border-t-transparent"></div></div>
-          ) : displayFaculty.length === 0 ? (
-            <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
-              <p className="text-center text-slate-600 dark:text-slate-400" data-testid="no-results-message">
-                {searchQuery ? 'No faculty found matching your search' : 'No recommendations found matching your criteria.'}
-              </p>
-            </Card>
-          ) : (
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {displayFaculty.map(faculty => (
-                <Card key={faculty.faculty_id} className="hover-lift cursor-pointer transition-all relative bg-white dark:bg-slate-900 dark:border-slate-700" onClick={() => navigate(`/faculty/${faculty.faculty_id}`)} data-testid={`faculty-card-${faculty.faculty_id}`}>
-                  <CardContent className="p-6">
-                    <div className="flex items-start gap-4 mb-4">
-                      <Avatar className="w-16 h-16">
-                        <AvatarImage src={faculty.image_url} />
-                        <AvatarFallback>{faculty.name.charAt(0)}</AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-lg text-slate-900 dark:text-slate-100">{faculty.name}</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{faculty.designation}</p>
-                        <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
-                      </div>
-                    </div>
-
-                    {showRecommendations && faculty.recommendation_reason && (
-                      <div className="mb-3 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-md text-xs">
-                        <p className="font-semibold text-blue-900 dark:text-blue-200 mb-1">Why you?</p>
-                        <p className="text-blue-800 dark:text-blue-300 leading-relaxed">{faculty.recommendation_reason}</p>
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-slate-500 dark:text-slate-400">Overall Rating</span>
-                        <div className="flex items-center gap-1">
-                          <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">{faculty.avg_ratings.overall.toFixed(1)}</span>
-                          <span className="text-xs text-slate-400 dark:text-slate-500">({faculty.rating_counts.overall})</span>
-                        </div>
-                      </div>
-
-                      {showCompatibilityScore && faculty.compatibility_percentage !== undefined && (
-                        <div className="mt-3 pt-3 border-t border-border dark:border-slate-700">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-teal-600 dark:text-teal-400">Compatibility</span>
-                            <span className="text-lg font-bold text-teal-600 dark:text-teal-400">{faculty.compatibility_percentage}%</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+            <div className="flex justify-center py-20">
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-teal-600 border-t-transparent"></div>
             </div>
+          ) : showSearch ? (
+            <>
+              <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="search-results-header">
+                {showRecommendations
+                  ? `Search Results in Recommendations (${filteredPool.length})`
+                  : `Search Results (${filteredPool.length})`}
+              </h2>
+              <FacultyGrid
+                facultyList={filteredPool}
+                showCompatibilityScore={showCompatibilityScore}
+                showRecommendations={showRecommendations}
+                emptyMessage="No faculty found matching your search."
+              />
+            </>
+          ) : showRecommendations ? (
+            <>
+              <h2 className="text-2xl font-bold mb-4 text-teal-600 dark:text-teal-400" data-testid="recommended-header">
+                Recommendations ({filteredPool.length})
+              </h2>
+
+              {keywordResults.length > 0 && (
+                <div className="mb-4">
+                  {semanticResults.length > 0 && (
+                    <div className="flex items-center gap-3 mb-4">
+                      <span className="text-sm font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400">Direct Matches</span>
+                      <div className="flex-1 h-px bg-teal-100 dark:bg-teal-900/40" />
+                    </div>
+                  )}
+                  <FacultyGrid
+                    facultyList={keywordResults}
+                    showCompatibilityScore={showCompatibilityScore}
+                    showRecommendations={showRecommendations}
+                    emptyMessage=""
+                  />
+                </div>
+              )}
+
+              {semanticResults.length > 0 && (
+                <div className="mt-10">
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="flex-1 h-px bg-gradient-to-r from-transparent via-slate-300 dark:via-slate-600 to-transparent" />
+                    <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800">
+                      <Sparkles className="w-4 h-4 text-purple-500 dark:text-purple-400" />
+                      <span className="text-sm font-semibold text-purple-700 dark:text-purple-300">
+                        Professors who have experience or interest in similar fields
+                      </span>
+                    </div>
+                    <div className="flex-1 h-px bg-gradient-to-r from-transparent via-slate-300 dark:via-slate-600 to-transparent" />
+                  </div>
+
+                  <FacultyGrid
+                    facultyList={semanticResults}
+                    showCompatibilityScore={showCompatibilityScore}
+                    showRecommendations={showRecommendations}
+                    emptyMessage=""
+                  />
+                </div>
+              )}
+
+              {keywordResults.length === 0 && semanticResults.length === 0 && (
+                <Card className="p-12 dark:bg-slate-900 dark:border-slate-800">
+                  <p className="text-center text-slate-600 dark:text-slate-400" data-testid="no-results-message">
+                    No recommendations found matching your criteria.
+                  </p>
+                </Card>
+              )}
+            </>
+          ) : (
+            <>
+              <h2 className="text-2xl font-bold mb-4 text-slate-900 dark:text-slate-100" data-testid="all-faculty-header">
+                All Faculty
+              </h2>
+              <FacultyGrid
+                facultyList={allFaculty}
+                showCompatibilityScore={false}
+                showRecommendations={false}
+                emptyMessage="No faculty found."
+              />
+            </>
           )}
         </div>
       </div>
