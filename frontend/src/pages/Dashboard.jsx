@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users, Moon, Sun, X, Save, Sparkles } from 'lucide-react';
+import { Star, TrendingUp, Search, LogOut, User, MessageSquare, Shield, Bot as BotIcon, LayoutDashboard, Settings, Users, Moon, Sun, X, Save, Sparkles, Linkedin, GraduationCap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -54,7 +54,19 @@ function FacultyCard({ faculty, showCompatibilityScore, showRecommendations }) {
           <div className="flex-1">
             <h3 className="font-semibold text-lg text-slate-900 dark:text-slate-100">{faculty.name}</h3>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">{faculty.designation}</p>
-            <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
+            <div className="flex items-center gap-2 mt-1">
+              <Badge variant="secondary" className="text-xs dark:bg-slate-800 dark:text-slate-300">{faculty.department}</Badge>
+              {faculty.linkedin_url && (
+                <a href={faculty.linkedin_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 ml-auto">
+                  <Linkedin className="w-4 h-4" />
+                </a>
+              )}
+              {faculty.scholar_url && (
+                <a href={faculty.scholar_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className={`text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 ${!faculty.linkedin_url ? 'ml-auto' : ''}`}>
+                  <GraduationCap className="w-4 h-4" />
+                </a>
+              )}
+            </div>
           </div>
         </div>
 

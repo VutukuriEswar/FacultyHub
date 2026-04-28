@@ -170,7 +170,8 @@ class Faculty(BaseModel):
     department: str
     designation: str
     image_url: Optional[str] = None
-    scholar_profile: Optional[str] = None
+    scholar_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
     research_interests: List[str] = Field(default_factory=list) 
     openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
@@ -183,7 +184,8 @@ class FacultyCreate(BaseModel):
     department: str
     designation: str
     image_url: Optional[str] = None
-    scholar_profile: Optional[str] = None
+    scholar_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
     publications: List[str] = Field(default_factory=list)
     research_interests: Optional[Union[str, List[str]]] = None 
     openalex_projects: List[Dict[str, Any]] = Field(default_factory=list)
@@ -193,7 +195,8 @@ class FacultyUpdate(BaseModel):
     department: Optional[str] = None
     designation: Optional[str] = None
     image_url: Optional[str] = None
-    scholar_profile: Optional[str] = None
+    scholar_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
     publications: Optional[List[str]] = None
     research_interests: Optional[Union[str, List[str]]] = None
     openalex_projects: Optional[Dict[str, Any]] = None
@@ -358,6 +361,14 @@ def load_faculty_from_csv():
             addr_val = None if pd.isna(office_addrs.iloc[index]) else office_addrs.iloc[index]
             email_val = None if pd.isna(emails.iloc[index]) else emails.iloc[index]
             phone_val = None if pd.isna(phones.iloc[index]) else phones.iloc[index]
+            
+            linkedin_val = None
+            if 'LinkedIn_URL' in df.columns and not pd.isna(row.get('LinkedIn_URL')):
+                linkedin_val = str(row['LinkedIn_URL'])
+                
+            scholar_val = None
+            if 'Scholar_URL' in df.columns and not pd.isna(row.get('Scholar_URL')):
+                scholar_val = str(row['Scholar_URL'])
 
             faculty_data = {
                 "faculty_id": faculty_id,
@@ -372,6 +383,8 @@ def load_faculty_from_csv():
                 "office_address": addr_val,
                 "email": email_val,
                 "phone": phone_val,
+                "linkedin_url": linkedin_val,
+                "scholar_url": scholar_val,
             }
             
             skipped_cols = ['Name', 'Name of Faculty', 'Faculty Name', 'Department', 'Dept', 'School Name', 'School Name', 'Designation', 'Title', 'Position', 'Role', 'Image', 'Image URL', 'Profile Picture', 'Photo', 'Picture', 'Image_URL', 'Specialisation', 'Specialization', 'Research Interests', 'Research', 'Area of Specialization', 'Office Address', 'Office_Address', 'Address', 'Office', 'Location', 'Email', 'Email Address', 'Phone', 'Mobile', 'Contact', 'Mobile Number', 'Profile URL', 'Profile_URL', 'Profile', 'Link', 'faculty_id']
@@ -486,9 +499,26 @@ def _run_selenium_scraper_sync():
                     spec = _get_text_after_label(driver, SELECTORS["specialisation_label"])
                     address = _get_text_after_label(driver, SELECTORS["address_label"])
 
+                    linkedin_url = ""
+                    scholar_url = ""
+                    social_links = driver.find_elements(By.TAG_NAME, "a")
+                    for link in social_links:
+                        try:
+                            href = link.get_attribute("href")
+                            if not href:
+                                continue
+                            if "linkedin.com/in/" in href:
+                                linkedin_url = href
+                            elif "scholar.google" in href and "user=" in href:
+                                scholar_url = href
+                        except Exception:
+                            continue
+
                     person["Email"] = email
                     person["Specialisation"] = spec
                     person["Office_Address"] = address
+                    person["LinkedIn_URL"] = linkedin_url
+                    person["Scholar_URL"] = scholar_url
                     
                     all_faculty_data.append(person)
                 except Exception as e:
@@ -514,7 +544,7 @@ def _run_selenium_scraper_sync():
         
     if all_faculty_data:
         df = pd.DataFrame(all_faculty_data)
-        cols = ["Name", "Designation", "Specialisation", "Email", "Office_Address", "Image_URL", "Profile_URL"]
+        cols = ["Name", "Designation", "Specialisation", "Email", "Office_Address", "Image_URL", "Profile_URL", "LinkedIn_URL", "Scholar_URL"]
         existing_cols = [c for c in cols if c in df.columns]
         df = df[existing_cols]
         df.to_csv(ROOT_DIR / "faculty_data.csv", index=False)
@@ -539,7 +569,7 @@ async def perform_csv_sync_and_db_update():
         logging.warning("CSV loaded empty after scrape.")
         return {"status": "failed", "message": "Empty CSV"}
 
-    db_faculty = await db.faculty.find({}, {"faculty_id": 1, "name": 1, "department": 1, "designation": 1, "email": 1, "image_url": 1, "office_address": 1, "research_interests": 1}).to_list(None)
+    db_faculty = await db.faculty.find({}, {"faculty_id": 1, "name": 1, "department": 1, "designation": 1, "email": 1, "image_url": 1, "office_address": 1, "research_interests": 1, "linkedin_url": 1, "scholar_url": 1}).to_list(None)
     db_map = {f['name'].lower().strip(): f for f in db_faculty}
     
     csv_map = {f['name'].lower().strip(): f for f in csv_faculty}
@@ -567,6 +597,10 @@ async def perform_csv_sync_and_db_update():
                 updates['department'] = csv_data['department']
             if csv_data.get('research_interests') and csv_data['research_interests'] != db_doc.get('research_interests'):
                 updates['research_interests'] = csv_data['research_interests']
+            if csv_data.get('linkedin_url') and csv_data['linkedin_url'] != db_doc.get('linkedin_url'):
+                updates['linkedin_url'] = csv_data['linkedin_url']
+            if csv_data.get('scholar_url') and csv_data['scholar_url'] != db_doc.get('scholar_url'):
+                updates['scholar_url'] = csv_data['scholar_url']
 
             if updates:
                 updated_faculty.append({"id": db_doc["faculty_id"], "name": db_doc["name"], "updates": updates})

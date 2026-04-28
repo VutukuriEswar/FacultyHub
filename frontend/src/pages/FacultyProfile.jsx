@@ -4,7 +4,8 @@ import axios from 'axios';
 import {
   Star, ArrowLeft, MessageSquare, Send, Reply,
   MapPin, Mail, Phone as PhoneIcon, BookOpen,
-  ExternalLink, Trash, Building2, Layers, TrendingUp, ShieldCheck
+  ExternalLink, Trash, Building2, Layers, TrendingUp, ShieldCheck,
+  Linkedin, GraduationCap
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -274,7 +275,7 @@ export default function FacultyProfile({ user }) {
 
   const SYSTEM_FIELDS = [
     'faculty_id', 'name', 'department', 'designation',
-    'scholar_profile', 'publications', 'research_interests', 'office_address',
+    'scholar_profile', 'scholar_url', 'linkedin_url', 'publications', 'research_interests', 'office_address',
     'email', 'phone',
     'avg_ratings', 'rating_counts', 'created_at', 'updated_at',
     'openalex_projects', 'recommendation_reason',
@@ -378,6 +379,18 @@ export default function FacultyProfile({ user }) {
                       <PhoneIcon className="w-4 h-4" />
                       <span>{faculty.phone}</span>
                     </div>
+                  )}
+                  {faculty.linkedin_url && (
+                    <a href={faculty.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 px-3 py-1.5 rounded-full border border-blue-200 dark:border-blue-800 transition-colors">
+                      <Linkedin className="w-4 h-4" />
+                      <span>LinkedIn</span>
+                    </a>
+                  )}
+                  {faculty.scholar_url && (
+                    <a href={faculty.scholar_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/40 px-3 py-1.5 rounded-full border border-purple-200 dark:border-purple-800 transition-colors">
+                      <GraduationCap className="w-4 h-4" />
+                      <span>Google Scholar</span>
+                    </a>
                   )}
                 </div>
 
