@@ -253,7 +253,7 @@ class ChatParticipant(BaseModel):
 class Chat(BaseModel):
     model_config = ConfigDict(extra="allow")
     chat_id: str
-    participants: List[str]
+    participants: List[Union[ChatParticipant, str]]
     messages: List[ChatMessage]
     unread_counts: Dict[str, int] = Field(default_factory=dict)
     created_at: datetime
