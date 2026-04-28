@@ -10,6 +10,7 @@ import requests
 import smtplib
 import bcrypt
 import socketio
+from jose import jwt as jose_jwt, JWTError
 import firebase_admin
 from firebase_admin import credentials, auth as fb_auth
 from datetime import datetime, timezone, timedelta
@@ -133,6 +134,7 @@ class User(BaseModel):
     anonymous_chat_id: Optional[str] = None
     anonymous_comment_id: Optional[str] = None
     theme_preference: str = "light"
+    google_linked: bool = False
 
 class UserRegister(BaseModel):
     email: EmailStr
@@ -1041,11 +1043,57 @@ async def logout(response: Response, session_token: Optional[str] = Cookie(None)
     )
     return {"message": "Logged out successfully"}
 
+_firebase_pubkeys: Dict[str, str] = {}
+_firebase_pubkeys_fetched_at: float = 0.0
+_FIREBASE_CERTS_URL = (
+    "https://www.googleapis.com/robot/v1/metadata/x509/"
+    "securetoken@system.gserviceaccount.com"
+)
+
+def _get_firebase_pubkeys() -> Dict[str, str]:
+    global _firebase_pubkeys, _firebase_pubkeys_fetched_at
+    if time.time() - _firebase_pubkeys_fetched_at < 3600 and _firebase_pubkeys:
+        return _firebase_pubkeys
+    resp = requests.get(_FIREBASE_CERTS_URL, timeout=10)
+    resp.raise_for_status()
+    _firebase_pubkeys = resp.json()
+    _firebase_pubkeys_fetched_at = time.time()
+    return _firebase_pubkeys
+
+def _verify_firebase_id_token(id_token: str, project_id: str) -> dict:
+    try:
+        unverified_header = jose_jwt.get_unverified_header(id_token)
+    except JWTError as exc:
+        raise ValueError(f"Bad JWT header: {exc}")
+
+    kid = unverified_header.get("kid")
+    pubkeys = _get_firebase_pubkeys()
+    if kid not in pubkeys:
+        raise ValueError(f"Unknown Firebase key id: {kid}")
+
+    cert_pem = pubkeys[kid]
+    try:
+        claims = jose_jwt.decode(
+            id_token,
+            cert_pem,
+            algorithms=["RS256"],
+            audience=project_id,
+            issuer=f"https://securetoken.google.com/{project_id}",
+            options={"verify_exp": True},
+        )
+    except JWTError as exc:
+        raise ValueError(f"JWT verification failed: {exc}")
+
+    return claims
+
 @api_router.post("/auth/google")
 async def google_auth(response: Response, body: GoogleAuthRequest):
-    _ensure_firebase()
+    firebase_project = os.environ.get("FIREBASE_PROJECT_ID", _FIREBASE_PROJECT_ID)
     try:
-        decoded = fb_auth.verify_id_token(body.id_token)
+        loop = asyncio.get_event_loop()
+        decoded = await loop.run_in_executor(
+            None, lambda: _verify_firebase_id_token(body.id_token, firebase_project)
+        )
     except Exception as e:
         logging.error(f"Firebase token verification failed: {e}")
         raise HTTPException(status_code=401, detail="Invalid Google token")
@@ -1062,11 +1110,18 @@ async def google_auth(response: Response, body: GoogleAuthRequest):
 
     user_doc = await db.users.find_one({"email": email}, {"_id": 0})
 
+    is_new_user = False
     if user_doc:
         if user_doc.get("blocked", False):
             raise HTTPException(status_code=403, detail="Account blocked")
+        if not user_doc.get("google_linked"):
+            await db.users.update_one(
+                {"user_id": user_doc["user_id"]},
+                {"$set": {"google_linked": True}}
+            )
+            user_doc["google_linked"] = True
     else:
-        # First-time Google sign-in → create the user
+        is_new_user = True
         unified_id = str(random.randint(1000, 9999))
         display_name = decoded.get("name") or email.split("@")[0]
         picture = decoded.get("picture")
@@ -1083,7 +1138,8 @@ async def google_auth(response: Response, body: GoogleAuthRequest):
             "anonymous_id": unified_id,
             "anonymous_chat_id": unified_id,
             "anonymous_comment_id": unified_id,
-            "theme_preference": "light"
+            "theme_preference": "light",
+            "google_linked": True,
         }
         await db.users.insert_one(dict(user_doc))
 
@@ -1109,7 +1165,40 @@ async def google_auth(response: Response, body: GoogleAuthRequest):
     if isinstance(user_doc.get("created_at"), str):
         user_doc["created_at"] = datetime.fromisoformat(user_doc["created_at"])
 
-    return {"user": User(**user_doc), "token": session_token}
+    return {"user": User(**user_doc), "token": session_token, "is_new_user": is_new_user}
+
+@api_router.post("/auth/link-google")
+async def link_google_account(body: GoogleAuthRequest, current_user: User = Depends(get_current_user)):
+    if current_user.google_linked:
+        raise HTTPException(status_code=400, detail="Google account is already linked.")
+
+    firebase_project = os.environ.get("FIREBASE_PROJECT_ID", _FIREBASE_PROJECT_ID)
+    try:
+        loop = asyncio.get_event_loop()
+        decoded = await loop.run_in_executor(
+            None, lambda: _verify_firebase_id_token(body.id_token, firebase_project)
+        )
+    except Exception as e:
+        logging.error(f"Firebase token verification failed during link: {e}")
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    google_email: str = decoded.get("email", "")
+    if not google_email:
+        raise HTTPException(status_code=400, detail="No email in Google token")
+
+    if google_email != current_user.email:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The Google account ({google_email}) does not match your registered email ({current_user.email})."
+        )
+
+    picture = decoded.get("picture") or current_user.picture
+    await db.users.update_one(
+        {"user_id": current_user.user_id},
+        {"$set": {"google_linked": True, "picture": picture}}
+    )
+
+    return {"message": "Google account linked successfully.", "google_linked": True}
 
 @api_router.patch("/users/me", response_model=User)
 async def update_profile(update: UserUpdate, current_user: User = Depends(get_current_user)):

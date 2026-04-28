@@ -116,19 +116,31 @@ export default function LandingPage() {
     try {
       const { idToken } = await signInWithGoogle();
       const response = await axios.post(`${API}/auth/google`, { id_token: idToken });
-      const { user, token } = response.data;
+      const { user, token, is_new_user } = response.data;
       if (token) {
         localStorage.setItem('session_token', token);
       }
-      toast.success(`Welcome, ${user.name}!`);
+      if (is_new_user) {
+        toast.success(`Account created! Welcome to FacultyHub, ${user.name}!`);
+      } else if (!isLogin) {
+        toast.info(`You already have an account. Welcome back, ${user.name}!`);
+      } else {
+        toast.success(`Welcome back, ${user.name}!`);
+      }
       navigate('/dashboard', { state: { user }, replace: true });
     } catch (error) {
       console.error('Google sign-in error:', error);
-      toast.error(error.response?.data?.detail || 'Google Sign-In failed. Make sure you use your @vitapstudent.ac.in account.');
+      const msg =
+        error?.message?.includes('@vitapstudent.ac.in')
+          ? 'Only @vitapstudent.ac.in Google accounts are allowed.'
+          : error.response?.data?.detail ||
+          'Google Sign-In failed. Please use your @vitapstudent.ac.in account.';
+      toast.error(msg);
     } finally {
       setIsGoogleLoading(false);
     }
   };
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-white to-orange-50 flex items-center justify-center p-4">
@@ -146,28 +158,28 @@ export default function LandingPage() {
           </p>
         </CardHeader>
         <CardContent>
-            <div className="mb-4">
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full flex items-center justify-center gap-3 h-11 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all duration-200 font-medium text-slate-700"
-                onClick={handleGoogleSignIn}
-                disabled={isGoogleLoading}
-              >
-                {isGoogleLoading ? (
-                  <span className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <GoogleIcon />
-                )}
-                {isGoogleLoading ? (isLogin ? 'Signing in...' : 'Signing up...') : (isLogin ? 'Continue with Google' : 'Sign up with Google')}
-              </Button>
+          <div className="mb-4">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full flex items-center justify-center gap-3 h-11 border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all duration-200 font-medium text-slate-700"
+              onClick={handleGoogleSignIn}
+              disabled={isGoogleLoading}
+            >
+              {isGoogleLoading ? (
+                <span className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <GoogleIcon />
+              )}
+              {isGoogleLoading ? (isLogin ? 'Signing in...' : 'Signing up...') : (isLogin ? 'Continue with Google' : 'Sign up with Google')}
+            </Button>
 
-              <div className="flex items-center gap-3 my-4">
-                <div className="flex-1 h-px bg-border" />
-                <span className="text-xs text-muted-foreground font-medium">{isLogin ? 'or sign in with email' : 'or sign up with email'}</span>
-                <div className="flex-1 h-px bg-border" />
-              </div>
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px bg-border" />
+              <span className="text-xs text-muted-foreground font-medium">{isLogin ? 'or sign in with email' : 'or sign up with email'}</span>
+              <div className="flex-1 h-px bg-border" />
             </div>
+          </div>
 
           <form onSubmit={isLogin ? handleLogin : (otpSent ? handleRegister : handleSendOTP)} className="space-y-4">
             {!isLogin && (
@@ -188,13 +200,13 @@ export default function LandingPage() {
             <div>
               <Label htmlFor="email">Email</Label>
               <Input
-                 id="email"
-                 type="email"
-                 placeholder="your.name@vitapstudent.ac.in"
-                 value={email}
-                 onChange={(e) => setEmail(e.target.value)}
-                 required
-                 disabled={!isLogin && otpSent}
+                id="email"
+                type="email"
+                placeholder="your.name@vitapstudent.ac.in"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                disabled={!isLogin && otpSent}
               />
             </div>
             <div>
