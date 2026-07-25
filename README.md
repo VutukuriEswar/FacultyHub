@@ -153,4 +153,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](./LICEN
 
 ## Acknowledgments
 
+This project was developed under the guidance of **Prof. Rajesh Duvvuru**, **VIT-AP University**. We sincerely thank our professor for their invaluable guidance, mentorship, and continuous support throughout the development of this project.
+
 Thanks to OpenAlex for providing open research data, MongoDB for the database, FastAPI for the web framework, Render for Deployment of Backend & Frontend, and the Socket.IO community for real-time capabilities. Special thanks to the Selenium project for enabling automated data freshness.
