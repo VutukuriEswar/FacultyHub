@@ -50,7 +50,9 @@ chainlit.md
 
 .vercel
 .env
+faculty_data_staging.csv
 faculty_data.csv
+openalex_checkpoint.json
 
 agenthub/agents/youtube/db
 

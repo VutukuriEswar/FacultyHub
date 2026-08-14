@@ -7,6 +7,7 @@ bcrypt
 python-jose[cryptography]
 pandas
 requests
+httpx
 python-dotenv
 better-profanity
 pydantic
